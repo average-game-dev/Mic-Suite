@@ -1,0 +1,11 @@
+env/
+.idea/
+sounds/*
+songs/*
+pre_sound/*
+downloads/*
+sound_list.txt
+playlists.json
+sounds.json
+cookies.txt
+
