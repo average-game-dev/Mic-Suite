@@ -12,21 +12,31 @@ def caps_lock_on():
     # GetKeyState returns low bit = toggle state
     return bool(ctypes.WinDLL("User32.dll").GetKeyState(0x14) & 1)
 
-# ---------------- DLL SETUP ----------------
-dll_folder = r"D:\python\base\v1\VRC-Mic-Suite"
-os.environ['PATH'] = dll_folder + os.pathsep + os.environ['PATH']
-dll = ctypes.CDLL(os.path.join(dll_folder, "heavyeffects.dll"))
+# ---------------- DLL / SO SETUP ----------------
+import platform
+
+dll_folder = r"source"
+lib_name = "heavyeffects.dll" if platform.system() == "Windows" else "heavyeffects.so"
+lib_path = os.path.join(dll_folder, lib_name)
+
+if platform.system() == "Windows":
+    # ensure the DLL folder is on PATH
+    os.environ['PATH'] = dll_folder + os.pathsep + os.environ.get('PATH', '')
+dll = ctypes.CDLL(lib_path)
 
 # define argument / return types
 dll.ps_create.argtypes = [ctypes.c_float, ctypes.c_int]
 dll.ps_create.restype = ctypes.c_void_p
-dll.ps_process.argtypes = [ctypes.c_void_p,
-                           ctypes.POINTER(ctypes.c_float),
-                           ctypes.POINTER(ctypes.c_float),
-                           ctypes.c_int]
+dll.ps_process.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.POINTER(ctypes.c_float),
+    ctypes.c_int
+]
 dll.ps_process.restype = None
 dll.ps_destroy.argtypes = [ctypes.c_void_p]
 dll.ps_destroy.restype = None
+
 
 # ---------------- Pitch Shifter ----------------
 class PitchShifter:

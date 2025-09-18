@@ -8,4 +8,8 @@ sound_list.txt
 playlists.json
 sounds.json
 cookies.txt
-
+*.dll
+*.exp
+*.lib
+*.obj
+*.exe
