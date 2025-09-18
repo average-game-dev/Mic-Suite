@@ -7,10 +7,10 @@ import os
 import threading
 import sys
 
-def caps_lock_on():
+def scroll_lock_on():
     # Windows virtual key for Caps Lock is 0x14
     # GetKeyState returns low bit = toggle state
-    return bool(ctypes.WinDLL("User32.dll").GetKeyState(0x14) & 1)
+    return bool(ctypes.WinDLL("User32.dll").GetKeyState(0x91) & 1)
 
 # ---------------- DLL / SO SETUP ----------------
 import platform
@@ -283,7 +283,7 @@ class HighPassEffect(Effect):
     def process(self,chunk):
         return scipy.signal.sosfilt(self.sos,chunk.flatten()).reshape(-1,1)
 
-# ---------------- AUDIO STREAM ----------------
+# ---------------*- AUDIO STREAM ----------------
 last_chunk=None
 def mic_callback(indata, frames, time, status):
     if status: print(status)
@@ -297,7 +297,7 @@ def out_callback(outdata, frames, time, status):
     except queue.Empty:
         chunk = last_chunk if last_chunk is not None else np.zeros((frames, 1), dtype='float32')
 
-    if not caps_lock_on():  # only process if Caps Lock is OFF
+    if not scroll_lock_on():  # only process if Caps Lock is OFF
         for effect in effects:
             chunk = effect.process(chunk)
     else:
