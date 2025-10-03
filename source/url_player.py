@@ -174,7 +174,7 @@ try:
             download_path = f"downloads/{name}.%(ext)s" if flags["save"] else f"downloads/{name}.temp.%(ext)s"
 
             download_ydl_opts = {
-                'cookies': 'cookies.txt',
+                'cookiesfrombrowser': ('firefox',),
                 'format': 'bestaudio/best',
                 'outtmpl': download_path,
                 'postprocessors': [{

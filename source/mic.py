@@ -59,7 +59,7 @@ class PitchShifter:
             self.obj = None
 
 # ---------------- MIC / QUEUE ----------------
-MIC_GAIN = 1.0  # base mic amplification
+MIC_GAIN = 1.5  # base mic amplification
 mic_queue = queue.Queue()
 effects = []
 
@@ -389,6 +389,8 @@ with sd.InputStream(samplerate=samplerate,device=mic_id,channels=1,
                 elif cmd=="effect list all":
                     for effect in effect_classes:
                         print(f"; {effect}")
+                elif cmd.split()[0] =="gain":
+                    MIC_GAIN = float(cmd.split()[1])
                 elif cmd=="help":
                     print("Commands: effect add <name>, effect remove <index|name>, effect list, help")
                     print("Available effects:", ", ".join(effect_classes.keys()))
@@ -396,3 +398,4 @@ with sd.InputStream(samplerate=samplerate,device=mic_id,channels=1,
                     print("Unknown command")
         except KeyboardInterrupt:
             print("\nExiting.")
+            import numpy; numpy.random.randint()

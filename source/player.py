@@ -22,6 +22,7 @@ gain_step = 0.05
 playlist_json = "playlists.json"  # JSON file with playlists
 shuffle_mode = False
 random_any_mode = False
+status_enabled = False
 
 # --------------------------
 # Helpers
@@ -209,14 +210,15 @@ def status_loop():
     while True:
         with playing_lock:
             if playing_song["data"] is not None:
-                pos = playing_song["pos"]
-                total = playing_song["data"].shape[0]
-                perc = pos / total * 100
-                pre = playing_song["preloaded"]
-                pre_info = f"idx={pre['index']} name={pre['name']}" if pre else "None"
-                print(f"[STATUS] pl={current_playlist_name} idx={current_index} name={playing_song['name']} "
-                      f"pos={format_time(pos/stream_sr)}/{format_time(total/stream_sr)} ({perc:.0f}%) "
-                      f"| paused={paused} shuffle={shuffle_mode} random={random_any_mode} | preloaded {pre_info}")
+                if status_enabled:
+                    pos = playing_song["pos"]
+                    total = playing_song["data"].shape[0]
+                    perc = pos / total * 100
+                    pre = playing_song["preloaded"]
+                    pre_info = f"idx={pre['index']} name={pre['name']}" if pre else "None"
+                    print(f"[STATUS] pl={current_playlist_name} idx={current_index} name={playing_song['name']} "
+                          f"pos={format_time(pos/stream_sr)}/{format_time(total/stream_sr)} ({perc:.0f}%) "
+                          f"| paused={paused} shuffle={shuffle_mode} random={random_any_mode} | preloaded {pre_info}")
         time.sleep(3)
 
 # --------------------------
@@ -227,11 +229,14 @@ def control_loop():
     while True:
         if keyboard.is_pressed(83):  # NumLock area
             if is_numlock_on() and keyboard.is_pressed('num 7'):
-                play_prev(); while keyboard.is_pressed('num 7'): time.sleep(0.05)
+                play_prev()
+                while keyboard.is_pressed('num 7'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 8'):
-                toggle_pause(); while keyboard.is_pressed('num 8'): time.sleep(0.05)
+                toggle_pause()
+                while keyboard.is_pressed('num 8'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 9'):
-                play_next(); while keyboard.is_pressed('num 9'): time.sleep(0.05)
+                play_next()
+                while keyboard.is_pressed('num 9'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num /'):
                 shuffle_mode = not shuffle_mode
                 print("Shuffle mode:", shuffle_mode)
@@ -241,17 +246,25 @@ def control_loop():
                 print("Random-anywhere mode:", random_any_mode)
                 while keyboard.is_pressed('num *'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 4'):
-                seek_seconds(-10); while keyboard.is_pressed('num 4'): time.sleep(0.05)
+                seek_seconds(-10)
+                while keyboard.is_pressed('num 4'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 1'):
-                seek_seconds(-30); while keyboard.is_pressed('num 1'): time.sleep(0.05)
+                seek_seconds(-30)
+                while keyboard.is_pressed('num 1'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 6'):
-                seek_seconds(10); while keyboard.is_pressed('num 6'): time.sleep(0.05)
+                seek_seconds(10)
+                while keyboard.is_pressed('num 6'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 3'):
-                seek_seconds(30); while keyboard.is_pressed('num 3'): time.sleep(0.05)
+                seek_seconds(30)
+                while keyboard.is_pressed('num 3'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 5'):
-                change_volume(gain_step); while keyboard.is_pressed('num 5'): time.sleep(0.05)
+                change_volume(gain_step)
+                while keyboard.is_pressed('num 5'): time.sleep(0.05)
             elif is_numlock_on() and keyboard.is_pressed('num 2'):
-                change_volume(-gain_step); while keyboard.is_pressed('num 2'): time.sleep(0.05)
+                change_volume(-gain_step)
+                while keyboard.is_pressed('num 2'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num -'):
+                status_enable = not status_enable
         time.sleep(0.05)
 
 # --------------------------
@@ -269,14 +282,23 @@ def cli_loop():
             print("[CLI] Exiting...")
             os._exit(0)
 
+
         elif cmd == "status":
+
             with playing_lock:
-                if playing_song["data"]:
+
+                if playing_song["data"] is not None:
+
                     pos = playing_song["pos"] / stream_sr
+
                     total = playing_song["data"].shape[0] / stream_sr
+
                     print(f"[CLI] Now playing {playing_song['name']} @ {format_time(pos)}/{format_time(total)}")
+
                 else:
+
                     print("[CLI] Nothing playing.")
+
 
         elif cmd.startswith("playlist "):
             name = cmd.split(" ", 1)[1].strip()
