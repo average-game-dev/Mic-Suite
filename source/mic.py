@@ -12,51 +12,6 @@ def scroll_lock_on():
     # GetKeyState returns low bit = toggle state
     return bool(ctypes.WinDLL("User32.dll").GetKeyState(0x91) & 1)
 
-# ---------------- DLL / SO SETUP ----------------
-import platform
-
-dll_folder = r"source"
-lib_name = "heavyeffects.dll" if platform.system() == "Windows" else "heavyeffects.so"
-lib_path = os.path.join(dll_folder, lib_name)
-
-if platform.system() == "Windows":
-    # ensure the DLL folder is on PATH
-    os.environ['PATH'] = dll_folder + os.pathsep + os.environ.get('PATH', '')
-dll = ctypes.CDLL(lib_path)
-
-# define argument / return types
-dll.ps_create.argtypes = [ctypes.c_float, ctypes.c_int]
-dll.ps_create.restype = ctypes.c_void_p
-dll.ps_process.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(ctypes.c_float),
-    ctypes.POINTER(ctypes.c_float),
-    ctypes.c_int
-]
-dll.ps_process.restype = None
-dll.ps_destroy.argtypes = [ctypes.c_void_p]
-dll.ps_destroy.restype = None
-
-
-# ---------------- Pitch Shifter ----------------
-class PitchShifter:
-    def __init__(self, pitch_factor=1.5, window_size=512):
-        self.obj = dll.ps_create(ctypes.c_float(pitch_factor), ctypes.c_int(window_size))
-        self.window_size = window_size
-
-    def process(self, chunk: np.ndarray) -> np.ndarray:
-        chunk = np.asarray(chunk, dtype=np.float32).flatten()
-        out = np.zeros_like(chunk, dtype=np.float32)
-        dll.ps_process(self.obj,
-                       chunk.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                       out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)),
-                       ctypes.c_int(len(chunk)))
-        return out.reshape(-1,1)
-
-    def __del__(self):
-        if hasattr(self, "obj") and self.obj:
-            dll.ps_destroy(self.obj)
-            self.obj = None
 
 # ---------------- MIC / QUEUE ----------------
 MIC_GAIN = 1.5  # base mic amplification
@@ -111,18 +66,6 @@ class RobotVoiceEffect(Effect):
         out = chunk * carrier
         self.phase += 2*np.pi*self.freq*len(chunk)/self.samplerate
         return out.reshape(-1,1)
-
-class ChipmunkEffect(Effect):
-    def __init__(self, pitch_up=1.5):
-        self.shifter = PitchShifter(pitch_factor=pitch_up)
-    def process(self, chunk):
-        return self.shifter.process(chunk)
-
-class DeepMonsterEffect(Effect):
-    def __init__(self, pitch_down=0.6):
-        self.shifter = PitchShifter(pitch_factor=pitch_down)
-    def process(self, chunk):
-        return self.shifter.process(chunk)
 
 class TelephoneEffect(Effect):
     def __init__(self, samplerate=48000):
