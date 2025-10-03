@@ -258,8 +258,7 @@ def out_callback(outdata, frames, time, status):
 
 # ---------------- EFFECT REGISTRY ----------------
 effect_classes={
-    'gain':GainEffect,'hypercam':HypercamMicEffect,'robot':RobotVoiceEffect,
-    'chipmunk':ChipmunkEffect,'monster':DeepMonsterEffect,'telephone':TelephoneEffect,
+    'gain':GainEffect,'hypercam':HypercamMicEffect,'robot':RobotVoiceEffect,'telephone':TelephoneEffect,
     'lofi':LoFiEffect,'megaphone':MegaphoneEffect,'whisper':WhisperEffect,'alien':AlienEffect,
     'echo':EchoEffect,'reverb':ReverbEffect,'distortion':DistortionEffect,'flanger':FlangerEffect,
     'chorus':ChorusEffect,'tremolo':TremoloEffect,'vibrato':VibratoEffect,'overdrive':OverdriveEffect,
