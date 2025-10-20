@@ -1,0 +1,15 @@
+env/
+.idea/
+pre_sound/*
+downloads/*
+songs/*
+sounds/*
+sound_list.txt
+playlists.json
+sounds.json
+cookies.txt
+*.dll
+*.exp
+*.lib
+*.obj
+*.exe
