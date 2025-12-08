@@ -8,7 +8,7 @@ import time
 import json
 from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton, QComboBox,
                              QVBoxLayout, QHBoxLayout, QSlider)
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, QSize
 import random
 import sys
 
@@ -351,6 +351,7 @@ class PlayerGUI(QWidget):
 
         self.setLayout(main_layout)
         self.setWindowTitle("AVPyPlay")
+        self.resize(QSize(400,250))
         self.show()
 
         # Timer for status update

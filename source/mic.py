@@ -1,343 +1,250 @@
 import sounddevice as sd
 import numpy as np
 import queue
-import scipy.signal
 import ctypes
-import os
 import threading
 import sys
+import tkinter as tk
+import time
+import msvcrt
+from collections import deque
 
-def scroll_lock_on():
-    # Windows virtual key for Caps Lock is 0x14
-    # GetKeyState returns low bit = toggle state
-    return bool(ctypes.WinDLL("User32.dll").GetKeyState(0x91) & 1)
+# ---------------- Globals & Thread-safety ----------------
+MIC_GAIN = 1.5
+mic_gain_lock = threading.Lock()
 
+volume = 0.0
+volume_lock = threading.Lock()
 
-# ---------------- MIC / QUEUE ----------------
-MIC_GAIN = 1.5  # base mic amplification
-mic_queue = queue.Queue()
-effects = []
+mic_on = True
+mic_lock = threading.Lock()
 
-# ---------------- BASE EFFECTS ----------------
-class Effect:
-    def process(self, chunk: np.ndarray) -> np.ndarray:
-        return chunk
+mic_queue = deque(maxlen=5)  # holds last 20 chunks
+mic_queue_lock = threading.Lock()
+last_chunk = None
+last_chunk_lock = threading.Lock()
 
-class GainEffect(Effect):
-    def __init__(self, gain=1.0):
-        self.gain = gain
-    def process(self, chunk):
-        chunk = np.asarray(chunk, dtype=np.float32) * self.gain
-        np.clip(chunk, -1.0, 1.0, out=chunk)
-        return chunk
+stop_event = threading.Event()
 
-class HypercamMicEffect(Effect):
-    def __init__(self, samplerate=48000):
-        self.sos = scipy.signal.butter(4, [150, 4000], btype='bandpass', fs=samplerate, output='sos')
-        self.decim = int(samplerate // 8000)
-        self.gain = 1.0
-        self.noise_level = 1e-4
-        self.threshold = 0.15
-    def process(self, chunk):
-        chunk = np.asarray(chunk, dtype=np.float32)
-        if chunk.ndim == 1: chunk = chunk.reshape(-1,1)
-        de_noised = chunk.copy()
-        de_noised[np.abs(de_noised) < self.threshold] = 0.0
-        filtered = scipy.signal.sosfilt(self.sos, de_noised[:,0])
-        decimated = filtered[::self.decim]
-        upsampled = np.repeat(decimated, self.decim)[:len(filtered)]
-        amplified = upsampled * self.gain
-        crushed = np.round(amplified * 128) / 128.0
-        noise = np.random.normal(0, self.noise_level, size=crushed.shape)
-        out = crushed + noise
-        out = np.clip(out, -1.0, 1.0)
-        return out.astype(np.float32).reshape(-1,1)
+# ---------------- Win32 / Tk helpers ----------------
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x20
+WS_EX_LAYERED = 0x80000
+WS_EX_TOOLWINDOW = 0x00000080  # hide from alt-tab / taskbar
 
-# ---------------- PREBAKED VOICE EFFECTS ----------------
-class RobotVoiceEffect(Effect):
-    def __init__(self, freq=30, samplerate=48000):
-        self.freq = freq
-        self.samplerate = samplerate
-        self.phase = 0
-    def process(self, chunk):
-        chunk = chunk.flatten()
-        t = np.arange(len(chunk)) / self.samplerate
-        carrier = np.sign(np.sin(2*np.pi*self.freq*t + self.phase))
-        out = chunk * carrier
-        self.phase += 2*np.pi*self.freq*len(chunk)/self.samplerate
-        return out.reshape(-1,1)
+def make_window_clickthrough(hwnd):
+    style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
 
-class TelephoneEffect(Effect):
-    def __init__(self, samplerate=48000):
-        self.sos = scipy.signal.butter(4,[300,3400],btype='bandpass',fs=samplerate,output='sos')
-    def process(self, chunk):
-        return scipy.signal.sosfilt(self.sos, chunk.flatten()).reshape(-1,1)
+def scroll_lock_updater():
+    while True:
+        global mic_on
+        with mic_lock:
+            mic_on = not bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
+        time.sleep(0.01) # 10 ms
 
-class LoFiEffect(Effect):
-    def __init__(self,bits=6,samplerate=48000,target_rate=8000):
-        self.bits=bits
-        self.decim=int(samplerate/target_rate)
-    def process(self, chunk):
-        flat=chunk.flatten()[::self.decim]
-        flat=np.round(flat*(2**self.bits))/(2**self.bits)
-        return np.repeat(flat,self.decim)[:len(chunk)].reshape(-1,1)
+def rgb(r, g, b):
+    return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
-class MegaphoneEffect(Effect):
-    def __init__(self,samplerate=48000):
-        self.sos=scipy.signal.butter(2,[500,3000],btype='bandpass',fs=samplerate,output='sos')
-    def process(self,chunk):
-        return scipy.signal.sosfilt(self.sos,chunk.flatten()).reshape(-1,1)
+# ---------------- Visual overlay (tkinter) ----------------
+def create_overlay():
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes('-topmost', True)
+    # Use a color we will treat as transparent
+    root.attributes('-transparentcolor', 'black')
+    root.configure(bg='black')
+    root.geometry('360x24+50+50')
 
-class WhisperEffect(Effect):
-    def __init__(self,noise_level=0.002):
-        self.noise_level=noise_level
-    def process(self,chunk):
-        chunk = chunk.flatten()*0.3
-        noise = np.random.normal(0,self.noise_level,size=len(chunk))
-        return (chunk+noise).reshape(-1,1)
+    canvas = tk.Canvas(root, width=360, height=24, bg='black', highlightthickness=0)
+    canvas.pack()
 
-class AlienEffect(Effect):
-    def __init__(self,freq=60,pitch_up=1.2,samplerate=48000):
-        self.freq=freq
-        self.pitch_up=pitch_up
-        self.samplerate=samplerate
-        self.phase=0
-    def process(self,chunk):
-        flat=np.interp(np.linspace(0,len(chunk)-1,int(len(chunk)*self.pitch_up)),
-                       np.arange(len(chunk)),chunk.flatten())
-        t=np.arange(len(flat))/self.samplerate
-        carrier=np.sin(2*np.pi*self.freq*t+self.phase)
-        self.phase+=2*np.pi*self.freq*len(flat)/self.samplerate
-        return (flat*carrier).reshape(-1,1)
+    # Make click-through
+    root.update_idletasks()
+    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+    make_window_clickthrough(hwnd)
 
-# ---------------- NEW 10 BASE EFFECTS ----------------
-class EchoEffect(Effect):
-    def __init__(self, delay=0.3, decay=0.5, samplerate=48000):
-        self.delay_samples = int(delay*samplerate)
-        self.buffer = np.zeros(self.delay_samples)
-        self.decay = decay
-    def process(self, chunk):
-        out = chunk.flatten().copy()
-        for i in range(len(out)):
-            echo_val = self.buffer[i % self.delay_samples]
-            self.buffer[i % self.delay_samples] = out[i] + echo_val*self.decay
-            out[i] += echo_val
-        return np.clip(out, -1, 1).reshape(-1,1)
+    def update_meter():
+        with volume_lock:
+            vol = volume
+        canvas.delete("all")
+        fill_len = int(min(max(vol * 1000.0, 0.0), 360))
+        with mic_lock:
+            if mic_on:
+                if vol < 0.2:
+                    color = rgb(10, 255, 18)
+                elif vol < 0.4:
+                    color = rgb(255, 218, 10)
+                else:
+                    color = rgb(255, 10, 10)
+            else:
+                if vol < 0.2:
+                    color = rgb(10, 155, 118)
+                elif vol < 0.4:
+                    color = rgb(255, 118, 110)
+                else:
+                    color = rgb(255, 10, 110)
+        # draw background faint bar (semi-visual guide)
+        canvas.create_rectangle(0, 0, 360, 24, outline='', fill='')
+        canvas.create_rectangle(0, 0, fill_len, 24, fill=color, outline='')
+        if not stop_event.is_set():
+            root.after(30, update_meter)  # schedule again
+        else:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
-class ReverbEffect(Effect):
-    def __init__(self, decay=0.3):
-        self.decay = decay
-        self.prev = 0
-    def process(self, chunk):
-        out = []
-        for x in chunk.flatten():
-            self.prev = self.prev*self.decay + x
-            out.append(self.prev)
-        return np.clip(out, -1, 1).reshape(-1,1)
+    def check_stop():
+        if stop_event.is_set():
+            root.destroy()  # gracefully exit
+        else:
+            root.after(50, check_stop)  # check again in 50ms
+            
+    root.after(0, update_meter)
+    return root
 
-class DistortionEffect(Effect):
-    def __init__(self, gain=5.0, threshold=0.5):
-        self.gain=gain
-        self.threshold=threshold
-    def process(self, chunk):
-        out=chunk.flatten()*self.gain
-        out=np.clip(out,-self.threshold,self.threshold)
-        return (out/self.threshold).reshape(-1,1)
+# ---------------- Audio callbacks ----------------
+def mic_callback(indata, frames, time_info, status):
+    if status:
+        # print status in background thread to avoid blocking audio
+        print("Mic callback status:", status, file=sys.stderr)
+    # apply gain thread-safely
+    with mic_gain_lock:
+        gain = MIC_GAIN
+    # make sure dtype is float32
+    chunk = indata.copy().astype('float32') * float(gain)
+    chunk = indata.copy() * gain
+    with mic_queue_lock:
+        mic_queue.append(chunk)
+        # update a simple peak volume metric for meter
+        global volume
+        with volume_lock:
+            # RMS / simple magnitude
+            volume_val = float(np.sqrt(np.mean(chunk**2)))
+            # smooth a bit by simple lowpass
+            volume = max(volume_val, volume * 0.9)  # coarse smoothing
 
-class FlangerEffect(Effect):
-    def __init__(self, depth=0.002, rate=0.25, samplerate=48000):
-        self.depth=int(depth*samplerate)
-        self.rate=rate
-        self.samplerate=samplerate
-        self.phase=0
-        self.buffer=np.zeros(samplerate)
-        self.idx=0
-    def process(self, chunk):
-        out=np.zeros_like(chunk.flatten())
-        for i,x in enumerate(chunk.flatten()):
-            delay=int((np.sin(2*np.pi*self.phase)*0.5+0.5)*self.depth)
-            self.phase+=self.rate/self.samplerate
-            self.buffer[self.idx]=x
-            out[i]=x+0.7*self.buffer[(self.idx-delay)%len(self.buffer)]
-            self.idx=(self.idx+1)%len(self.buffer)
-        return np.clip(out,-1,1).reshape(-1,1)
-
-class ChorusEffect(Effect):
-    def __init__(self, depth=0.003, rate=1.5, samplerate=48000):
-        self.depth=int(depth*samplerate)
-        self.rate=rate
-        self.samplerate=samplerate
-        self.phase=0
-        self.buffer=np.zeros(samplerate)
-        self.idx=0
-    def process(self, chunk):
-        out=np.zeros_like(chunk.flatten())
-        for i,x in enumerate(chunk.flatten()):
-            delay=int((np.sin(2*np.pi*self.phase)*0.5+0.5)*self.depth)
-            self.phase+=self.rate/self.samplerate
-            self.buffer[self.idx]=x
-            out[i]=0.5*x+0.5*self.buffer[(self.idx-delay)%len(self.buffer)]
-            self.idx=(self.idx+1)%len(self.buffer)
-        return np.clip(out,-1,1).reshape(-1,1)
-
-class TremoloEffect(Effect):
-    def __init__(self, freq=5.0, samplerate=48000):
-        self.freq=freq
-        self.samplerate=samplerate
-        self.phase=0
-    def process(self, chunk):
-        t=np.arange(len(chunk))/self.samplerate
-        lfo=0.5*(1+np.sin(2*np.pi*self.freq*t+self.phase))
-        self.phase+=2*np.pi*self.freq*len(chunk)/self.samplerate
-        return (chunk.flatten()*lfo).reshape(-1,1)
-
-class VibratoEffect(Effect):
-    def __init__(self, depth=0.002, rate=5.0, samplerate=48000):
-        self.depth=depth
-        self.rate=rate
-        self.samplerate=samplerate
-        self.phase=0
-    def process(self, chunk):
-        t=np.arange(len(chunk))
-        delay=self.depth*np.sin(2*np.pi*self.rate*t/self.samplerate+self.phase)
-        idx=t+delay*self.samplerate
-        idx=np.clip(idx,0,len(chunk)-1)
-        out=np.interp(idx,t,chunk.flatten())
-        return out.reshape(-1,1)
-
-class OverdriveEffect(Effect):
-    def __init__(self, drive=2.0):
-        self.drive=drive
-    def process(self, chunk):
-        out=np.tanh(chunk.flatten()*self.drive)
-        return out.reshape(-1,1)
-
-class BitcrusherEffect(Effect):
-    def __init__(self, bits=4):
-        self.levels=2**bits
-    def process(self, chunk):
-        flat=chunk.flatten()
-        out=np.round(flat*self.levels)/self.levels
-        return out.reshape(-1,1)
-
-class HighPassEffect(Effect):
-    def __init__(self, cutoff=1000, samplerate=48000):
-        self.sos=scipy.signal.butter(4,cutoff,btype='highpass',fs=samplerate,output='sos')
-    def process(self,chunk):
-        return scipy.signal.sosfilt(self.sos,chunk.flatten()).reshape(-1,1)
-
-# ---------------*- AUDIO STREAM ----------------
-last_chunk=None
-def mic_callback(indata, frames, time, status):
-    if status: print(status)
-    mic_queue.put(indata.copy()*MIC_GAIN)
-
-def out_callback(outdata, frames, time, status):
+def out_callback(outdata, frames, time_info, status):
     global last_chunk
-    try:
-        chunk = mic_queue.get_nowait()
-        last_chunk = chunk
-    except queue.Empty:
-        chunk = last_chunk if last_chunk is not None else np.zeros((frames, 1), dtype='float32')
+    if status:
+        print("Out callback status:", status, file=sys.stderr)
 
-    if not scroll_lock_on():  # only process if Caps Lock is OFF
-        for effect in effects:
-            chunk = effect.process(chunk)
-    else:
-        # mute if Caps Lock is on
-        chunk = np.zeros((frames, 1), dtype='float32')
+    # When scroll lock is ON, bypass playback (i.e., silence)
+    with mic_lock:
+        if not mic_on:
+            outdata[:] = np.zeros((frames, outdata.shape[1] if outdata.ndim > 1 else 1), dtype='float32')
+            return
 
+   # in out callback
+    with mic_queue_lock:
+        if mic_queue:
+            chunk = mic_queue.popleft()
+        else:
+            chunk = np.zeros((frames, 1), dtype='float32')
+
+    # Ensure chunk is 2D Nx1
+    if chunk.ndim == 1:
+        chunk = chunk.reshape(-1, 1)
+
+    # Resample/pad/trim to requested frames
     if chunk.shape[0] < frames:
         chunk = np.pad(chunk, ((0, frames - chunk.shape[0]), (0, 0)))
     elif chunk.shape[0] > frames:
-        chunk = np.interp(np.linspace(0, len(chunk)-1, frames),
-                          np.arange(len(chunk)), chunk.flatten()).reshape(-1,1)
+        # interpolate down/up to the requested number of frames
+        x_old = np.arange(chunk.shape[0])
+        x_new = np.linspace(0, chunk.shape[0] - 1, frames)
+        chunk = np.interp(x_new, x_old, chunk[:, 0]).astype('float32').reshape(-1, 1)
 
-    outdata[:] = chunk
+    outdata[:] = chunk[:frames]
 
-
-# ---------------- EFFECT REGISTRY ----------------
-effect_classes={
-    'gain':GainEffect,'hypercam':HypercamMicEffect,'robot':RobotVoiceEffect,'telephone':TelephoneEffect,
-    'lofi':LoFiEffect,'megaphone':MegaphoneEffect,'whisper':WhisperEffect,'alien':AlienEffect,
-    'echo':EchoEffect,'reverb':ReverbEffect,'distortion':DistortionEffect,'flanger':FlangerEffect,
-    'chorus':ChorusEffect,'tremolo':TremoloEffect,'vibrato':VibratoEffect,'overdrive':OverdriveEffect,
-    'bitcrusher':BitcrusherEffect,'highpass':HighPassEffect
-}
-
-# ---------------- MAIN ----------------
-print("=== Devices ===")
-for idx,d in enumerate(sd.query_devices()):
-    print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}")
-
-mic_id=int(input("Enter your mic device ID: "))
-out_id=int(input("Enter output device ID: "))
-
-samplerate=48000
-blocksize=1024
-
-with sd.InputStream(samplerate=samplerate,device=mic_id,channels=1,
-                    blocksize=blocksize,callback=mic_callback):
-    with sd.OutputStream(samplerate=samplerate,device=out_id,channels=1,
-                         blocksize=blocksize,callback=out_callback):
-        print("Streaming mic. Type commands (Ctrl+C to exit).")
-        print("Commands: effect add <name>, effect remove <index|name>, effect list, help")
-        try:
-            while True:
-                cmd=input("> ").strip().lower()
-                if cmd.startswith("effect add"):
-                    name = cmd.split()[2]
-                    if name == "all":
-                        effects = []
-                        for cls_name, cls in effect_classes.items():
-                            if 'samplerate' in cls.__init__.__code__.co_varnames:
-                                effects.append(cls(samplerate=samplerate))
-                            else:
-                                effects.append(cls())
-                        print("Added all effects.")
-                    else:
-                        cls = effect_classes.get(name)
-                        if cls:
-                            if name == 'hypercam':
-                                effects = [e for e in effects if not isinstance(e, HypercamMicEffect)]
-                            effects.append(cls(samplerate=samplerate) if 'samplerate' in cls.__init__.__code__.co_varnames else cls())
-                            print(f"Added effect: {name}")
-                        else:
-                            print(f"No such effect: {name}")
-
-                elif cmd.startswith("effect remove"):
-                    key = cmd.split()[2]
-                    if key == "all":
-                        effects = []
-                        print("Removed all effects.")
-                    else:
-                        try:
-                            if key.isdigit():
-                                removed = effects.pop(int(key))
-                            else:
-                                for i,e in enumerate(effects):
-                                    if e.__class__.__name__.lower().startswith(key):
-                                        removed = effects.pop(i)
-                                        break
-                                else:
-                                    raise ValueError(f"No effect named '{key}'")
-                            print(f"Removed effect: {removed.__class__.__name__}")
-                        except Exception as e:
-                            print("Invalid remove:", e)
-
-                elif cmd=="effect list":
-                    for i,e in enumerate(effects):
-                        print(f"[{i}] {e.__class__.__name__}")
-                elif cmd=="effect list all":
-                    for effect in effect_classes:
-                        print(f"; {effect}")
-                elif cmd.split()[0] =="gain":
-                    MIC_GAIN = float(cmd.split()[1])
-                elif cmd=="help":
-                    print("Commands: effect add <name>, effect remove <index|name>, effect list, help")
-                    print("Available effects:", ", ".join(effect_classes.keys()))
+# ---------------- Command loop (background) ----------------
+def command_loop():
+    global MIC_GAIN
+    print("Commands: gain <float>, help, quit")
+    buffer = ""
+    while not stop_event.is_set():
+        if msvcrt.kbhit():
+            char = msvcrt.getwche()
+            if char in ('\r', '\n'):
+                cmd = buffer.strip()
+                buffer = ""
+                if cmd == "quit":
+                    stop_event.set()
+                    break
+                elif cmd.startswith("gain"):
+                    try:
+                        MIC_GAIN = float(cmd.split()[1])
+                        print(f"MIC_GAIN set to {MIC_GAIN}")
+                    except Exception:
+                        print("Invalid gain")
+                elif cmd == "help":
+                    print("gain <float> — set mic gain")
+                    print("quit — exit")
                 else:
                     print("Unknown command")
-        except KeyboardInterrupt:
-            print("\nExiting.")
-            import numpy; numpy.random.randint()
+            else:
+                buffer += char
+        else:
+            time.sleep(0.01)
+
+# ---------------- Main wiring ----------------
+def main():
+    # show devices first
+    print("=== Devices ===")
+    for idx, d in enumerate(sd.query_devices()):
+        print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) (I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+
+    try:
+        mic_id = int(input("Enter your mic device ID: "))
+        out_id = int(input("Enter output device ID: "))
+    except Exception as e:
+        print("Invalid device id:", e)
+        return
+
+    samplerate = 48000
+    blocksize = 1024
+
+    # create overlay in main thread
+    root = create_overlay()
+
+    # start audio streams non-blocking
+    try:
+        in_stream = sd.InputStream(samplerate=samplerate, device=mic_id, channels=1,
+                                   blocksize=blocksize, callback=mic_callback, dtype='float32')
+        out_stream = sd.OutputStream(samplerate=samplerate, device=out_id, channels=1,
+                                     blocksize=blocksize, callback=out_callback, dtype='float32')
+        in_stream.start()
+        out_stream.start()
+    except Exception as e:
+        print("Failed to start streams:", e)
+        return
+    # start scroll lock updater
+    scroll_lock_updater_thread = threading.Thread(target=scroll_lock_updater)
+    scroll_lock_updater_thread.start()
+    # start command loop in background
+    cmd_thread = threading.Thread(target=command_loop, daemon=True)
+    cmd_thread.start()
+
+    # run tkinter mainloop (blocks here)
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_event.set()
+        try:
+            in_stream.stop()
+            in_stream.close()
+        except Exception:
+            pass
+        try:
+            out_stream.stop()
+            out_stream.close()
+        except Exception:
+            pass
+        print("Shutting down...")
+
+if __name__ == "__main__":
+    main()

@@ -7,7 +7,7 @@ import time
 # --------------------------
 # Settings
 # --------------------------
-music_folder = r"songs1"  # folder containing your songs
+music_folder = r"prep"  # folder containing your songs
 target_sr = 48000                  # target sample rate
 skip_if_exists = True              # skip files already normalized
 

@@ -10,7 +10,11 @@ from collections import deque
 import ctypes
 import json
 import random
-
+import time
+from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton, QComboBox,
+                             QVBoxLayout, QHBoxLayout, QSlider, QScrollArea, QGridLayout)
+from PyQt6.QtCore import Qt
+from sys import argv
 
 # --------------------------
 # Settings (tweakable)
@@ -283,9 +287,9 @@ def gain_control_loop():
 def choose_output_devices():
     print("=== Output Devices ===")
     devs = sd.query_devices()
-    for idx, d in enumerate(devs):
-        if d['max_output_channels'] > 0:
-            print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) (I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+    for idx, dev in enumerate(devs):
+        if dev['max_output_channels'] > 0:
+            print(f"[{idx}] {dev['name']} (hostapi={dev['hostapi']})")
     try:
         d1 = int(input("Primary output device ID: ").strip())
         d2 = int(input("Secondary output device ID (loopback/mic): ").strip())
@@ -294,26 +298,105 @@ def choose_output_devices():
         print("Invalid device ID.")
         exit(1)
 
+# -------------------------
+# GUI
+# -------------------------
+
+class SoundGUI(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Soundboard GUI")
+        self.setMinimumSize(800, 600)
+        self.init_ui()
+
+    def init_ui(self):
+        main_layout = QVBoxLayout()
+
+        # Device selection
+        dev_layout = QHBoxLayout()
+        self.dev1_combo = QComboBox()
+        self.dev2_combo = QComboBox()
+        self.populate_devices()
+        dev_layout.addWidget(QLabel("Primary device:"))
+        dev_layout.addWidget(self.dev1_combo)
+        dev_layout.addWidget(QLabel("Secondary device:"))
+        dev_layout.addWidget(self.dev2_combo)
+        main_layout.addLayout(dev_layout)
+
+        # Master gain
+        gain_layout = QHBoxLayout()
+        self.master_slider = QSlider(Qt.Orientation.Horizontal)
+        self.master_slider.setRange(0, 200)  # 0.0 – 2.0
+        self.master_slider.setValue(int(master_gain * 100))
+        self.master_slider.valueChanged.connect(self.change_master_gain)
+        gain_layout.addWidget(QLabel("Master Gain:"))
+        gain_layout.addWidget(self.master_slider)
+        main_layout.addLayout(gain_layout)
+
+        # Scrollable area with grid layout for aligned buttons/sliders
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_widget = QWidget()
+        self.scroll_layout = QGridLayout()
+        self.scroll_layout.setColumnStretch(0, 0)  # buttons column
+        self.scroll_layout.setColumnStretch(1, 1)  # sliders column
+        self.scroll_widget.setLayout(self.scroll_layout)
+        self.scroll_area.setWidget(self.scroll_widget)
+        main_layout.addWidget(self.scroll_area)
+
+        self.setLayout(main_layout)
+        self.build_sound_buttons()  # build once; no timer needed
+
+    def populate_devices(self):
+        devs = sd.query_devices()
+        output_devs = [dev['name'] for dev in devs if dev['max_output_channels'] > 0]
+        self.dev1_combo.addItems(output_devs)
+        self.dev2_combo.addItems(output_devs)
+
+    def change_master_gain(self, val):
+        global master_gain
+        master_gain = val / 100.0
+        print(f"Master gain set to {master_gain}")
+
+    def build_sound_buttons(self):
+        # Create grid: column 0 = buttons, column 1 = sliders
+        row_idx = 0
+        for idx, info in sorted(audios.items()):
+            if info is None:
+                continue
+
+            btn = QPushButton(f"{idx}: {os.path.basename(manual_files.get(idx, 'Unknown'))}")
+            btn.clicked.connect(lambda checked, i=idx: self.play_sound(i))
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 200)
+            slider.setValue(int(info['gain'] * 100))
+            slider.valueChanged.connect(lambda val, i=idx: self.change_sound_gain(i, val))
+
+            self.scroll_layout.addWidget(btn, row_idx, 0)
+            self.scroll_layout.addWidget(slider, row_idx, 1)
+            row_idx += 1
+
+    def play_sound(self, idx):
+        if audios.get(idx):
+            play_sound(audios[idx]["data"], audios[idx]["gain"])
+            print(f"Playing {idx}")
+        else:
+            print(f"No audio loaded at {idx}")
+
+    def change_sound_gain(self, idx, val):
+        if audios.get(idx):
+            audios[idx]["gain"] = val / 100.0
+            print(f"Set gain of {idx} to {audios[idx]['gain']}")
 # --------------------------
 # Main
 # --------------------------
 if __name__ == "__main__":
-    # Preload a selection of sounds (200-209) first (as your old code did)
-    for i in range(10):
-        file = manual_files.get(i + 200)
-        if not file or not os.path.exists(file):
-            print(f"missing file for slot {i+200}: {file}")
-            continue
-        norm = prepare_audio_hq(file)
-        data, sr = load_and_prepare_audio(norm)
-        audios[i + 200] = {"data": data, "sr": sr, "gain": 1.0}
-        print(f"Loaded num_pad_{i + 200}: {file}")
+    import sys
+    import threading
+    import keyboard
 
-    dev1, dev2 = choose_output_devices()
-
-    # Load normal slots 0-39
-    for i in range(70):
-        file = manual_files.get(i)
+    # Preload all sounds
+    for i, file in manual_files.items():
         if file and os.path.exists(file):
             norm = prepare_audio_hq(file)
             data, sr = load_and_prepare_audio(norm)
@@ -322,43 +405,11 @@ if __name__ == "__main__":
         else:
             audios[i] = None
 
-    # Create and start streams using callbacks
-    try:
-        # Primary stream (master) will mix and produce chunks
-        stream_master = sd.OutputStream(
-            samplerate=stream_sr,
-            channels=stream_channels,
-            device=dev1,
-            dtype='float32',
-            blocksize=blocksize,
-            callback=master_callback
-        )
+    # Keyboard hook runs in background thread
+    threading.Thread(target=lambda: keyboard.hook(on_key), daemon=True).start()
 
-        # Secondary stream (slave) will consume master's mixed chunks
-        stream_slave = sd.OutputStream(
-            samplerate=stream_sr,
-            channels=stream_channels,
-            device=dev2,
-            dtype='float32',
-            blocksize=blocksize,
-            callback=slave_callback
-        )
-
-        stream_master.start()
-        stream_slave.start()
-    except Exception as e:
-        print("Failed to open streams:", e)
-        raise
-
-    # threads
-    threading.Thread(target=gain_control_loop, daemon=True).start()
-    keyboard.hook(on_key)
-    print("Press numpad 0–9 to play sounds. Use +, -, and Enter for alt slots. Press * to stop. F12 to quit.")
-
-    # main wait
-    keyboard.wait('F12')
-
-    # cleanup
-    stream_master.stop(); stream_master.close()
-    stream_slave.stop(); stream_slave.close()
-    print("Exited cleanly.")
+    # Start GUI
+    app = QApplication(sys.argv)
+    gui = SoundGUI()
+    gui.show()
+    sys.exit(app.exec())

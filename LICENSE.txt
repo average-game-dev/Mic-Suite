@@ -416,5 +416,5 @@ absolute discretion, revoke, modify, or reinstate the license
 granted to any user or entity at any time. Each exercise of this
 discretion is independent and does not establish a precedent or
 obligation toward any other user or entity, past, present,
-or future. The author’s decisions under this clause are final and
- binding.
+or future. The author’s decisions under this clause are final and 
+binding.

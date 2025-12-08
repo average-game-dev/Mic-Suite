@@ -1,4 +1,6 @@
 env/
+__pycache__/
+.vscode/
 .idea/
 pre_sound/*
 downloads/*
@@ -8,6 +10,7 @@ sound_list.txt
 playlists.json
 sounds.json
 cookies.txt
+cookies.sqlite
 *.dll
 *.exp
 *.lib
