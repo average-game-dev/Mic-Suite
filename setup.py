@@ -50,6 +50,12 @@ def main():
         print(f"{ENV_DIR}\\Scripts\\activate.bat")
     else:
         print(f"source {ENV_DIR}/bin/activate")
+        
+    with open("sounds.json", "a"):
+        pass
+    with open("playlists.json", "a"):
+        pass
+
 
 if __name__ == "__main__":
     main()
