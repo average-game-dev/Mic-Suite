@@ -6,9 +6,11 @@ import threading
 import subprocess
 import time
 import json
-from PyQt6.QtWidgets import (QApplication, QWidget, QLabel, QPushButton, QComboBox,
-                             QVBoxLayout, QHBoxLayout, QSlider)
-from PyQt6.QtCore import QTimer, Qt, QSize
+from PySide6.QtWidgets import (
+    QWidget, QLabel, QSlider, QComboBox, QPushButton,
+    QHBoxLayout, QVBoxLayout, QApplication
+)
+from PySide6.QtCore import Qt, QSize, QTimer
 import random
 import sys
 
@@ -328,13 +330,13 @@ class PlayerGUI(QWidget):
 
         self.volume_label = QLabel("Volume")
         self.volume_label.setObjectName("VolumeLabel")
-        self.volume_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)  # center label horizontally
+        self.volume_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         right_layout.addWidget(self.volume_label)
 
         # Horizontal wrapper to center slider
         h_slider_layout = QHBoxLayout()
         h_slider_layout.setObjectName("HorSliderLayout")
-        h_slider_layout.addStretch()  # left spacer
+        h_slider_layout.addStretch()
 
         self.volume_slider = QSlider(Qt.Orientation.Vertical)
         self.volume_slider.setObjectName("VolumeSlider")
@@ -344,8 +346,8 @@ class PlayerGUI(QWidget):
         self.volume_slider.valueChanged.connect(self.change_volume)
         h_slider_layout.addWidget(self.volume_slider)
 
-        h_slider_layout.addStretch()  # right spacer
-        right_layout.addLayout(h_slider_layout, stretch=1)  # fills remaining vertical space
+        h_slider_layout.addStretch()
+        right_layout.addLayout(h_slider_layout, stretch=1)
 
         main_layout.addLayout(right_layout)
 

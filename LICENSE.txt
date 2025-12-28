@@ -411,10 +411,10 @@ Creative Commons may be contacted at creativecommons.org.
 
 ADDITIONAL TERMS:
 
-"Discretionary License Clause": The author may, at their sole and
-absolute discretion, revoke, modify, or reinstate the license
-granted to any user or entity at any time. Each exercise of this
-discretion is independent and does not establish a precedent or
-obligation toward any other user or entity, past, present,
-or future. The author’s decisions under this clause are final and 
-binding.
+Discretionary License Clause: The author may, at any time and for any
+reason, revoke, modify, or reinstate the license granted to any user or
+entity. Each exercise of this discretion is entirely independent and 
+does not establish any precedent or obligation toward any other user or
+entity, past, present, or future. The author’s decisions under this clause
+are final, binding, and may be altered, reversed, or otherwise changed at
+the author’s sole discretion without prior notice.

@@ -1,16 +1,15 @@
+import signal
 import sounddevice as sd
 import numpy as np
-import queue
-import ctypes
 import threading
-import sys
-import tkinter as tk
+from keymods import scrolllock_on
+from PySide6 import QtWidgets, QtCore, QtGui
 import time
-import msvcrt
+import sys
 from collections import deque
 
 # ---------------- Globals & Thread-safety ----------------
-MIC_GAIN = 1.5
+MIC_GAIN = 1.0
 mic_gain_lock = threading.Lock()
 
 volume = 0.0
@@ -19,182 +18,207 @@ volume_lock = threading.Lock()
 mic_on = True
 mic_lock = threading.Lock()
 
-mic_queue = deque(maxlen=5)  # holds last 20 chunks
+mic_queue = deque()  # holds incoming chunks
 mic_queue_lock = threading.Lock()
-last_chunk = None
-last_chunk_lock = threading.Lock()
 
 stop_event = threading.Event()
 
-# ---------------- Win32 / Tk helpers ----------------
-GWL_EXSTYLE = -20
-WS_EX_TRANSPARENT = 0x20
-WS_EX_LAYERED = 0x80000
-WS_EX_TOOLWINDOW = 0x00000080  # hide from alt-tab / taskbar
+def handle_sigint(signum, frame):
+    stop_event.set()
+    QtWidgets.QApplication.quit()
 
-def make_window_clickthrough(hwnd):
-    style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-    style |= WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
-    ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+# helpers
 
 def scroll_lock_updater():
-    while True:
-        global mic_on
-        with mic_lock:
-            mic_on = not bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
-        time.sleep(0.01) # 10 ms
+    global mic_on
+    last_state = True
+
+    while not stop_event.is_set():
+        new_state = not scrolllock_on()
+
+        if new_state != last_state:
+            with mic_lock:
+                mic_on = new_state
+
+            if not new_state:
+                # FLUSH ALL AUDIO
+                with mic_queue_lock:
+                    mic_queue.clear()
+                ring_buffer.clear()
+
+        last_state = new_state
+        time.sleep(0.01)
+
+# UI
 
 def rgb(r, g, b):
     return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
-# ---------------- Visual overlay (tkinter) ----------------
-def create_overlay():
-    root = tk.Tk()
-    root.overrideredirect(True)
-    root.attributes('-topmost', True)
-    # Use a color we will treat as transparent
-    root.attributes('-transparentcolor', 'black')
-    root.configure(bg='black')
-    root.geometry('360x24+50+50')
+class MeterOverlay(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
 
-    canvas = tk.Canvas(root, width=360, height=24, bg='black', highlightthickness=0)
-    canvas.pack()
+        self.setWindowFlags(
+            QtCore.Qt.FramelessWindowHint |
+            QtCore.Qt.WindowStaysOnTopHint |
+            QtCore.Qt.Tool
+        )
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
 
-    # Make click-through
-    root.update_idletasks()
-    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
-    make_window_clickthrough(hwnd)
+        self.resize(360, 24)
+        self.move(50, 50)
 
-    def update_meter():
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(30)
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
         with volume_lock:
             vol = volume
-        canvas.delete("all")
-        fill_len = int(min(max(vol * 1000.0, 0.0), 360))
-        with mic_lock:
-            if mic_on:
-                if vol < 0.2:
-                    color = rgb(10, 255, 18)
-                elif vol < 0.4:
-                    color = rgb(255, 218, 10)
-                else:
-                    color = rgb(255, 10, 10)
-            else:
-                if vol < 0.2:
-                    color = rgb(10, 155, 118)
-                elif vol < 0.4:
-                    color = rgb(255, 118, 110)
-                else:
-                    color = rgb(255, 10, 110)
-        # draw background faint bar (semi-visual guide)
-        canvas.create_rectangle(0, 0, 360, 24, outline='', fill='')
-        canvas.create_rectangle(0, 0, fill_len, 24, fill=color, outline='')
-        if not stop_event.is_set():
-            root.after(30, update_meter)  # schedule again
-        else:
-            try:
-                root.destroy()
-            except Exception:
-                pass
 
-    def check_stop():
-        if stop_event.is_set():
-            root.destroy()  # gracefully exit
+        with mic_lock:
+            on = mic_on
+
+        fill = int(min(max(vol * 1000.0, 0.0), 360))
+
+        if on:
+            color = (
+                QtGui.QColor(10, 255, 18) if vol < 0.2 else
+                QtGui.QColor(255, 218, 10) if vol < 0.4 else
+                QtGui.QColor(255, 10, 10)
+            )
         else:
-            root.after(50, check_stop)  # check again in 50ms
-            
-    root.after(0, update_meter)
-    return root
+            color = (
+                QtGui.QColor(10, 155, 118) if vol < 0.2 else
+                QtGui.QColor(255, 118, 110) if vol < 0.4 else
+                QtGui.QColor(255, 10, 110)
+            )
+
+        painter.fillRect(0, 0, fill, 24, color)
 
 # ---------------- Audio callbacks ----------------
 def mic_callback(indata, frames, time_info, status):
     if status:
-        # print status in background thread to avoid blocking audio
         print("Mic callback status:", status, file=sys.stderr)
-    # apply gain thread-safely
+
+    with mic_lock:
+        if not mic_on:
+            return  # drop input ONLY when muted
+
     with mic_gain_lock:
         gain = MIC_GAIN
-    # make sure dtype is float32
-    chunk = indata.copy().astype('float32') * float(gain)
+
     chunk = indata.copy() * gain
+
     with mic_queue_lock:
         mic_queue.append(chunk)
-        # update a simple peak volume metric for meter
-        global volume
-        with volume_lock:
-            # RMS / simple magnitude
-            volume_val = float(np.sqrt(np.mean(chunk**2)))
-            # smooth a bit by simple lowpass
-            volume = max(volume_val, volume * 0.9)  # coarse smoothing
+
+    global volume
+    with volume_lock:
+        volume_val = float(np.sqrt(np.mean(chunk**2)))
+        volume = max(volume_val, volume * 0.9)
+
+# Ring buffer for leftover samples
+ring_buffer = deque()
 
 def out_callback(outdata, frames, time_info, status):
-    global last_chunk
+    global ring_buffer
+
     if status:
         print("Out callback status:", status, file=sys.stderr)
 
-    # When scroll lock is ON, bypass playback (i.e., silence)
     with mic_lock:
-        if not mic_on:
-            outdata[:] = np.zeros((frames, outdata.shape[1] if outdata.ndim > 1 else 1), dtype='float32')
-            return
+        muted = not mic_on
 
-   # in out callback
+    if muted:
+        with mic_queue_lock:
+            mic_queue.clear()
+        ring_buffer.clear()
+        outdata[:] = 0
+        return
+
+    chunks = []
+    total = 0
+
     with mic_queue_lock:
-        if mic_queue:
-            chunk = mic_queue.popleft()
-        else:
-            chunk = np.zeros((frames, 1), dtype='float32')
+        while ring_buffer and total < frames:
+            c = ring_buffer.popleft()
+            chunks.append(c)
+            total += len(c)
 
-    # Ensure chunk is 2D Nx1
-    if chunk.ndim == 1:
-        chunk = chunk.reshape(-1, 1)
+        while mic_queue and total < frames:
+            c = mic_queue.popleft()
+            chunks.append(c)
+            total += len(c)
 
-    # Resample/pad/trim to requested frames
+    if chunks:
+        chunk = np.concatenate(chunks, axis=0)
+    else:
+        chunk = np.zeros((frames, 1), dtype='float32')
+
     if chunk.shape[0] < frames:
         chunk = np.pad(chunk, ((0, frames - chunk.shape[0]), (0, 0)))
-    elif chunk.shape[0] > frames:
-        # interpolate down/up to the requested number of frames
-        x_old = np.arange(chunk.shape[0])
-        x_new = np.linspace(0, chunk.shape[0] - 1, frames)
-        chunk = np.interp(x_new, x_old, chunk[:, 0]).astype('float32').reshape(-1, 1)
 
     outdata[:] = chunk[:frames]
 
-# ---------------- Command loop (background) ----------------
+    leftover = chunk[frames:]
+    if len(leftover):
+        ring_buffer.append(leftover)
+
+
+# ---------------- Command loop ----------------
 def command_loop():
     global MIC_GAIN
     print("Commands: gain <float>, help, quit")
-    buffer = ""
-    while not stop_event.is_set():
-        if msvcrt.kbhit():
-            char = msvcrt.getwche()
-            if char in ('\r', '\n'):
-                cmd = buffer.strip()
-                buffer = ""
-                if cmd == "quit":
-                    stop_event.set()
-                    break
-                elif cmd.startswith("gain"):
-                    try:
-                        MIC_GAIN = float(cmd.split()[1])
-                        print(f"MIC_GAIN set to {MIC_GAIN}")
-                    except Exception:
-                        print("Invalid gain")
-                elif cmd == "help":
-                    print("gain <float> — set mic gain")
-                    print("quit — exit")
-                else:
-                    print("Unknown command")
-            else:
-                buffer += char
-        else:
-            time.sleep(0.01)
 
-# ---------------- Main wiring ----------------
+    while not stop_event.is_set():
+        try:
+            line = sys.stdin.readline()
+            if not line:  # EOF
+                stop_event.set()
+                break
+        except KeyboardInterrupt:
+            stop_event.set()
+            break
+
+        cmd = line.strip()
+
+        if cmd == "":
+            continue
+
+        if cmd == "quit":
+            stop_event.set()
+            break
+
+        elif cmd.startswith("gain"):
+            parts = cmd.split(maxsplit=1)
+            if len(parts) != 2:
+                print("Usage: gain <float>")
+                continue
+            try:
+                with mic_gain_lock:
+                    MIC_GAIN = float(parts[1])
+                print(f"MIC_GAIN set to {MIC_GAIN}")
+            except ValueError:
+                print("Invalid gain")
+
+        elif cmd == "help":
+            print("gain <float> — set mic gain")
+            print("quit — exit")
+
+        else:
+            print("Unknown command")
+
+
+# ---------------- Main ----------------
 def main():
-    # show devices first
     print("=== Devices ===")
     for idx, d in enumerate(sd.query_devices()):
-        print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) (I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+        print(f"[{idx}] {d['name']} (I/O: {d['max_input_channels']}/{d['max_output_channels']})")
 
     try:
         mic_id = int(input("Enter your mic device ID: "))
@@ -204,34 +228,36 @@ def main():
         return
 
     samplerate = 48000
-    blocksize = 1024
+    blocksize = 256  # small blocksize for low latency
 
-    # create overlay in main thread
-    root = create_overlay()
-
-    # start audio streams non-blocking
     try:
         in_stream = sd.InputStream(samplerate=samplerate, device=mic_id, channels=1,
-                                   blocksize=blocksize, callback=mic_callback, dtype='float32')
+                                   blocksize=blocksize, callback=mic_callback,
+                                   dtype='float32', latency='low')
         out_stream = sd.OutputStream(samplerate=samplerate, device=out_id, channels=1,
-                                     blocksize=blocksize, callback=out_callback, dtype='float32')
+                                     blocksize=blocksize, callback=out_callback,
+                                     dtype='float32', latency='low')
         in_stream.start()
         out_stream.start()
     except Exception as e:
         print("Failed to start streams:", e)
         return
-    # start scroll lock updater
-    scroll_lock_updater_thread = threading.Thread(target=scroll_lock_updater)
+
+    scroll_lock_updater_thread = threading.Thread(target=scroll_lock_updater, daemon=True)
     scroll_lock_updater_thread.start()
-    # start command loop in background
+
     cmd_thread = threading.Thread(target=command_loop, daemon=True)
     cmd_thread.start()
 
-    # run tkinter mainloop (blocks here)
+    app = QtWidgets.QApplication(sys.argv)
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
+    overlay = MeterOverlay()
+    overlay.show()
+
     try:
-        root.mainloop()
-    except KeyboardInterrupt:
-        pass
+        app.exec()
     finally:
         stop_event.set()
         try:

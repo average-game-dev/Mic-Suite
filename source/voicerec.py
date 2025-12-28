@@ -7,33 +7,35 @@ import wave
 import comtypes.client
 from multiprocessing import Process
 
+# im not rewriting this for linux, if you want to you can and submit a pull request
+
 # ------------------- CONFIG -------------------
 SAMPLE_RATE = 16000
 CHANNELS = 1
 KEY = '`'  # hold to speak
 POST_RELEASE_SECONDS = 0.25  # record extra after release
 
+# ------------------- OUTPUT DEVICE SELECTION -------------------
+
 def choose_output_devices():
     print("=== Output Devices ===")
     devs = sd.query_devices()
     output_devs = [d for d in devs if d['max_output_channels'] > 0]
-    
+
     for idx, d in enumerate(output_devs):
         print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) "
               f"(I/O: {d['max_input_channels']}/{d['max_output_channels']})")
-    
+
     try:
         d1_idx = int(input("Primary output device index: ").strip())
         d2_idx = int(input("Secondary output device index (loopback/mic): ").strip())
-        
+
         d1_name = output_devs[d1_idx]['name']
         d2_name = output_devs[d2_idx]['name']
         return d1_name, d2_name
     except (ValueError, IndexError):
         print("Invalid device selection.")
         exit(1)
-
-DEVICE_1_NAME, DEVICE_2_NAME = choose_output_devices()
 
 # ------------------- DEVICE RESOLUTION -------------------
 
@@ -51,6 +53,7 @@ def get_device_ids():
     return d1, d2
 
 # ------------------- STT -------------------
+
 recognizer = sr.Recognizer()
 
 def record_while_held(key=KEY, post_release=POST_RELEASE_SECONDS):
@@ -130,7 +133,13 @@ def select_voice():
             print("Enter a valid number.")
 
 # ------------------- MAIN LOOP -------------------
+
 def main():
+    global DEVICE_1_NAME, DEVICE_2_NAME
+
+    # ✅ FIX: Device selection happens ONLY ONCE now
+    DEVICE_1_NAME, DEVICE_2_NAME = choose_output_devices()
+
     selected_voice = select_voice()
     selected_voice.Rate = 0
     selected_voice.Volume = 100
@@ -154,7 +163,6 @@ def main():
 
                     speech_audio = tts_to_audio(text, selected_voice)
 
-                    # dynamically resolve devices each time
                     d1, d2 = get_device_ids()
 
                     p1 = Process(target=play_device, args=(speech_audio, 22050, d1))

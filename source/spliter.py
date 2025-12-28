@@ -1,9 +1,5 @@
 import sounddevice as sd
-import ctypes
-
-# Windows function to check key state
-def capslock_on():
-    return ctypes.windll.user32.GetKeyState(0x14) & 1 != 0
+from keymods import capslock_on
 
 # Configure devices
 print("=== Devices ===")

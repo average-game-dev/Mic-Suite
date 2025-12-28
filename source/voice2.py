@@ -1,11 +1,12 @@
 import pyttsx3
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
-import torch
 import sounddevice as sd
 import soundfile as sf
 import tempfile
 import os
 import threading
+
+# im not rewriting this for linux, if you want to you can and submit a pull request
 
 def choose_output_devices():
     print("=== Output Devices ===")

@@ -4,7 +4,7 @@ import soundfile as sf
 import numpy as np
 import threading
 import keyboard
-import ctypes
+from keymods import is_numlock_on
 import random
 import subprocess
 import time
@@ -23,12 +23,6 @@ playlist_json = "playlists.json"  # JSON file with playlists
 shuffle_mode = False
 random_any_mode = False
 status_enabled = False
-
-# --------------------------
-# Helpers
-# --------------------------
-def is_numlock_on():
-    return bool(ctypes.windll.user32.GetKeyState(0x90) & 1)
 
 def ffmpeg_resample_and_normalize(input_file, output_file, target_sr=48000):
     temp_resampled = output_file.replace("_normalized.wav", "_resampled.wav")
@@ -227,7 +221,7 @@ def status_loop():
 def control_loop():
     global shuffle_mode, random_any_mode
     while True:
-        if keyboard.is_pressed(83):  # NumLock area
+        if keyboard.is_pressed(83):  # So that music player operations don't act weirdly with normal numpad functions.
             if is_numlock_on() and keyboard.is_pressed('num 7'):
                 play_prev()
                 while keyboard.is_pressed('num 7'): time.sleep(0.05)

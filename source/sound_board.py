@@ -10,7 +10,7 @@ from collections import deque
 import ctypes
 import json
 import random
-
+from keymods import is_numlock_on
 
 # --------------------------
 # Settings (tweakable)
@@ -19,12 +19,6 @@ stream_sr = 48000
 stream_channels = 2
 blocksize = 1024  # preferred frames per callback
 master_gain = 1.0  # default master gain
-
-# --------------------------
-# Helpers
-# --------------------------
-def is_numlock_on():
-    return bool(ctypes.windll.user32.GetKeyState(0x90) & 1)
 
 # --------------------------
 # Audio file preprocessing (ffmpeg)

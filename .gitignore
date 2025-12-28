@@ -1,4 +1,5 @@
 env/
+linuxenv/
 __pycache__/
 .vscode/
 .idea/
@@ -16,3 +17,4 @@ cookies.sqlite
 *.lib
 *.obj
 *.exe
+dual_device.wav
