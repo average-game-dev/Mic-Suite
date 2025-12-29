@@ -218,7 +218,7 @@ def command_loop():
 def main():
     print("=== Devices ===")
     for idx, d in enumerate(sd.query_devices()):
-        print(f"[{idx}] {d['name']} (I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+        print(f"[{idx}] {d['name']} (I/O: {d['max_input_channels']}/{d['max_output_channels']}) ({d['hostapi']})")
 
     try:
         mic_id = int(input("Enter your mic device ID: "))

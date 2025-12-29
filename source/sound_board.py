@@ -21,6 +21,11 @@ blocksize = 1024  # preferred frames per callback
 master_gain = 1.0  # default master gain
 
 # --------------------------
+# Lock and stuff
+# --------------------------
+audio_engine_alive = False
+
+# --------------------------
 # Audio file preprocessing (ffmpeg)
 # --------------------------
 def ffmpeg_resample_and_normalize(input_file, output_file, target_sr=48000):
@@ -69,16 +74,17 @@ numpad_enter_code = 28
 numpad_del_code = 83
 manual_files = {}
 
-with open("sounds.json", "r", encoding="utf-8") as f:
-    data = json.load(f)
+def load():
+    with open("sounds.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-for key in data["manual_files"].keys():
-    manual_files[int(key)] = data["manual_files"][key]
+    for key in data["manual_files"].keys():
+        manual_files[int(key)] = data["manual_files"][key]
 
 # --------------------------
 # Runtime audio structures
 # --------------------------
-audios = {}  # index -> {"data": np.array, "sr": int, "gain": float}
+audios = {}  # index -> {"data": `np.array, "sr": int, "gain": float}
 play_queue = queue.Queue()  # place requests here
 playing_sounds = []  # list of dicts: {"data":..., "pos":int, "gain":float}
 playing_lock = threading.Lock()
@@ -238,6 +244,118 @@ def slave_callback(outdata, frames, time_info, status):
             # no mixed chunk ready -> silence
             outdata[:] = np.zeros((frames, stream_channels), dtype='float32')
 
+# -------------------------
+# Audio Engine
+# -------------------------
+def pick_devices():
+    global dev1, dev2
+    print("=== Output Devices ===")
+    devs = sd.query_devices()
+    for idx, d in enumerate(devs):
+        if d['max_output_channels'] > 0:
+            print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) "
+                  f"(I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+    try:
+        dev1 = int(input("Primary output device ID: ").strip())
+        dev2 = int(input("Secondary output device ID (loopback/mic): ").strip())
+    except ValueError:
+        print("Invalid device ID.")
+        exit(1)
+        
+def create_streams():
+    global stream_master, stream_slave
+    try:
+        stream_master = sd.OutputStream(
+            samplerate=stream_sr,
+            channels=stream_channels,
+            device=dev1,
+            dtype='float32',
+            blocksize=blocksize,
+            callback=master_callback
+        )
+
+        stream_slave = sd.OutputStream(
+            samplerate=stream_sr,
+            channels=stream_channels,
+            device=dev2,
+            dtype='float32',
+            blocksize=blocksize,
+            callback=slave_callback
+        )
+    except Exception as e:
+        print("Failed to create streams:", e)
+        raise
+
+def start_streams():
+    global stream_master, stream_slave
+    try:
+        stream_master.start()
+        stream_slave.start()
+    except Exception as e:
+        print("Failed to start streams:", e)
+        raise
+
+def start_streams():
+    global stream_master, stream_slave
+    try:
+        stream_master.start()
+        stream_slave.start()
+    except Exception as e:
+        print("Failed to start streams:", e)
+        raise
+
+def start_audio_threads():
+    threading.Thread(target=gain_control_loop, daemon=True).start()
+    keyboard.hook(on_key)
+
+def start_audio_engine():
+    global audio_engine_alive
+
+    if audio_engine_alive:
+        print("audio engine already running")
+        return
+
+    pick_devices()        # user chooses devices
+    create_streams()
+    start_streams()
+    start_audio_threads()
+
+    audio_engine_alive = True
+
+def stop_audio_engine():
+    global stream_master, stream_slave, audio_engine_alive
+    print("Stopping audio engine...")
+
+    try:
+        if stream_master:
+            stream_master.stop()
+            stream_master.close()
+            stream_master = None
+    except Exception as e:
+        print("Master stop error:", e)
+
+    try:
+        if stream_slave:
+            stream_slave.stop()
+            stream_slave.close()
+            stream_slave = None
+    except Exception as e:
+        print("Slave stop error:", e)
+
+    with playing_lock:
+        playing_sounds.clear()
+
+    with slave_buffer_lock:
+        slave_buffer.clear()
+
+    try:
+        play_queue.queue.clear()
+    except Exception:
+        pass
+
+    audio_engine_alive = False  # ← reset so hard reload can start it again
+    print("Audio engine fully stopped.")
+
 # --------------------------
 # Gain control thread (CLI)
 # --------------------------
@@ -268,8 +386,94 @@ def gain_control_loop():
                     print(f"No sound at index {idx}")
             except Exception as e:
                 print(f"Error setting gain: {e}")
+        elif cmd.startswith("reload "):
+            mode = cmd.split()[1]
+            
+            reload(mode)
+                
         else:
             print("Commands: master <value>, gain <index> <value>")
+
+# --------------------------
+# Audio reload helper
+# --------------------------
+def reload_audio_files():
+    """
+    Loads/resamples/normalizes all audio files from manual_files into `audios`.
+    Handles slots 200-209 and 0-69.
+    """
+    # Reload 200–209
+    for i in range(10):
+        file = manual_files.get(i + 200)
+        if not file or not os.path.exists(file):
+            print(f"missing file for slot {i + 200}: {file}")
+            continue
+        norm = prepare_audio_hq(file)
+        data, sr = load_and_prepare_audio(norm)
+        audios[i + 200] = {"data": data, "sr": sr, "gain": 1.0}
+        print(f"Reloaded num_pad_{i + 200}: {file}")
+
+    # Reload 0–69
+    for i in range(70):
+        file = manual_files.get(i)
+        if file and os.path.exists(file):
+            norm = prepare_audio_hq(file)
+            data, sr = load_and_prepare_audio(norm)
+            audios[i] = {"data": data, "sr": sr, "gain": audios.get(i, {}).get("gain", 1.0)}
+            print(f"Reloaded num_pad_{i}: {file}")
+        else:
+            audios[i] = None
+
+# --------------------------
+# Reloaders
+# --------------------------
+def reload_soft():
+    print("Soft reloading sounds...")
+
+    # Stop playback
+    with playing_lock:
+        playing_sounds.clear()
+
+    with slave_buffer_lock:
+        slave_buffer.clear()
+
+    # Reload JSON
+    manual_files.clear()
+    load()
+
+    # Reload audio
+    reload_audio_files()
+
+    print("Soft reload complete.")
+
+def reload_hard():
+    print("Hard reloading audio engine...")
+
+    # Stop everything
+    stop_audio_engine()
+
+    # Reload JSON and audio files
+    manual_files.clear()
+    load()
+    reload_audio_files()
+
+    # Pick devices again
+    pick_devices()
+
+    # Re-create and start streams
+    create_streams()
+    start_streams()
+
+    print("Hard reload complete.")
+
+# Update reload dispatcher
+def reload(mode):
+    if mode == "soft":
+        reload_soft()
+    elif mode == "hard":
+        reload_hard()
+    else:
+        print(f"Unknown reload mode: {mode}")
 
 # --------------------------
 # Device chooser
@@ -291,21 +495,22 @@ def choose_output_devices():
 # --------------------------
 # Main
 # --------------------------
-if __name__ == "__main__":
-    # Preload a selection of sounds (200-209) first (as your old code did)
+def main():
+    # Load JSON file and manual_files
+    load()
+
+    # Preload a selection of sounds (200-209)
     for i in range(10):
         file = manual_files.get(i + 200)
         if not file or not os.path.exists(file):
-            print(f"missing file for slot {i+200}: {file}")
+            print(f"missing file for slot {i + 200}: {file}")
             continue
         norm = prepare_audio_hq(file)
         data, sr = load_and_prepare_audio(norm)
         audios[i + 200] = {"data": data, "sr": sr, "gain": 1.0}
         print(f"Loaded num_pad_{i + 200}: {file}")
 
-    dev1, dev2 = choose_output_devices()
-
-    # Load normal slots 0-39
+    # Preload normal slots 0-69
     for i in range(70):
         file = manual_files.get(i)
         if file and os.path.exists(file):
@@ -316,43 +521,17 @@ if __name__ == "__main__":
         else:
             audios[i] = None
 
-    # Create and start streams using callbacks
-    try:
-        # Primary stream (master) will mix and produce chunks
-        stream_master = sd.OutputStream(
-            samplerate=stream_sr,
-            channels=stream_channels,
-            device=dev1,
-            dtype='float32',
-            blocksize=blocksize,
-            callback=master_callback
-        )
+    # Start the audio engine (device selection + streams + threads)
+    start_audio_engine()
 
-        # Secondary stream (slave) will consume master's mixed chunks
-        stream_slave = sd.OutputStream(
-            samplerate=stream_sr,
-            channels=stream_channels,
-            device=dev2,
-            dtype='float32',
-            blocksize=blocksize,
-            callback=slave_callback
-        )
+    print("Press numpad 0-9 to play sounds. Use +, -, and Enter for alt slots. Press * to stop. F12 to quit.")
 
-        stream_master.start()
-        stream_slave.start()
-    except Exception as e:
-        print("Failed to open streams:", e)
-        raise
-
-    # threads
-    threading.Thread(target=gain_control_loop, daemon=True).start()
-    keyboard.hook(on_key)
-    print("Press numpad 0–9 to play sounds. Use +, -, and Enter for alt slots. Press * to stop. F12 to quit.")
-
-    # main wait
+    # Wait for F12 to exit
     keyboard.wait('F12')
 
-    # cleanup
-    stream_master.stop(); stream_master.close()
-    stream_slave.stop(); stream_slave.close()
+    # Cleanup on exit
+    stop_audio_engine()
     print("Exited cleanly.")
+
+
+main()

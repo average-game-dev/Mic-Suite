@@ -399,6 +399,7 @@ class PlayerGUI(QWidget):
 
         dev1_idx = int(self.device1_combo.currentText().split(']')[0][1:])
         dev2_idx = int(self.device2_combo.currentText().split(']')[0][1:])
+        
         threading.Thread(target=playback_loop, args=(dev1_idx, dev2_idx), daemon=True).start()
         print("Playback started")
 
