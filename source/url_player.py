@@ -8,6 +8,8 @@ import threading
 import keyboard
 import numpy as np
 
+# mostly doesn't work because of recent youtube changes
+
 # --------------------------
 # Settings
 # --------------------------

@@ -1,9 +1,9 @@
 env/
 linuxenv/
-__pycache__/
+__pycache__
 .vscode/
 .idea/
-pre_sound/*
+presound/*
 downloads/*
 songs/*
 sounds/*

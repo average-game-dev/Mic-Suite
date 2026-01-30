@@ -1,6 +1,8 @@
 import sounddevice as sd
 from keymods import capslock_on
 
+toggler = False
+
 # Configure devices
 print("=== Devices ===")
 for idx, d in enumerate(sd.query_devices()):
@@ -13,9 +15,9 @@ output_device2 = int(input("Enter output2 device ID: "))
 samplerate = 44100
 blocksize = 1024
 
-# Per-channel gain (0.0 = silence, 1.0 = unity)
+# Per-channel gain (0.0 = silence, 1.0 = base)
 gain1 = 1
-gain2 = 3
+gain2 = 1
 
 # Open output streams
 stream1 = sd.OutputStream(
@@ -26,6 +28,7 @@ stream2 = sd.OutputStream(
 )
 
 def callback(indata, frames, time, status):
+    global gain1, gain2
     if status:
         print(status)
     
@@ -36,8 +39,8 @@ def callback(indata, frames, time, status):
     # Always write to output1
     stream1.write(out1)
 
-    # Only write to output2 if Caps Lock is on
-    if capslock_on():
+    # Only write to output2 if Caps Lock XOR'd by toggler is True
+    if capslock_on() != toggler:
         stream2.write(out2)
 
 with stream1, stream2:
@@ -46,6 +49,19 @@ with stream1, stream2:
         print("Streaming... Caps Lock controls output2")
         try:
             while True:
-                sd.sleep(1000)
+                cmd = input("> ")
+                cmds = cmd.split()
+
+                if cmds[0] == "gain":
+                    if cmds[1] == "primary" or cmds[1] == "1":
+                        gain1 = float(cmds[2])
+                    if cmds[1] == "secondary" or cmds[1] == "2":
+                        gain2 = float(cmds[2])
+                    if cmds[1] == "both" or cmds[1] == "0":
+                        gain1 = float(cmds[2])
+                        gain2 = float(cmds[2])
+                elif cmds[0] == "toggle":
+                    toggler = not toggler
+
         except KeyboardInterrupt:
             print("Stopped")

@@ -5,7 +5,7 @@ import sys
 
 input_dir = sys.argv[1]
 if not os.path.isdir(input_dir):
-    print("[ERROR] What the fuck bro, that doesn't exist?")
+    print("[ERROR] That input_dir doesn't exist.")
     exit(1)
 output_dir = os.path.join(input_dir, "output")
 

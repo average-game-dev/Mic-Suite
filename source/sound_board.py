@@ -7,10 +7,24 @@ import soundfile as sf
 import numpy as np
 import keyboard
 from collections import deque
-import ctypes
 import json
 import random
 from keymods import is_numlock_on
+import rich
+from sys import argv
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--debug", action="store_true")
+parser.add_argument("--cache", required=False, choices=[
+    "delete",
+    "DEFAULT OPTION"
+], default="DEFAULT OPTION")
+
+args = parser.parse_args()
+
+if args.debug: debug = True
+else: debug = False
 
 # --------------------------
 # Settings (tweakable)
@@ -20,45 +34,85 @@ stream_channels = 2
 blocksize = 1024  # preferred frames per callback
 master_gain = 1.0  # default master gain
 
+SOUND_DIR = "sounds"
+CACHE_DIR = "cache"
+CACHE_PATH = ""
+
 # --------------------------
-# Lock and stuff
+# Locks and stuff
 # --------------------------
 audio_engine_alive = False
 
 # --------------------------
 # Audio file preprocessing (ffmpeg)
 # --------------------------
-def ffmpeg_resample_and_normalize(input_file, output_file, target_sr=48000):
-    temp_resampled = output_file.replace("_normalized.wav", "_resampled.wav")
-    subprocess.run([
-        "ffmpeg", "-y", "-i", input_file,
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", temp_resampled
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def load_audio_cached(file, normalize=True, recurse=False):
+    """
+    Load any audio file with resampling, optional loudness normalization,
+    and cache the processed result in FLAC for fast future loads.
+    """
+    base_name = os.path.splitext(os.path.basename(file))[0]
 
-    subprocess.run([
-        "ffmpeg", "-y", "-i", temp_resampled,
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", output_file
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Ensure cache directory exists
+    os.makedirs(os.path.join(SOUND_DIR, CACHE_DIR), exist_ok=True)
+    cache_path = os.path.join(SOUND_DIR, CACHE_DIR)
+    os.makedirs(cache_path, exist_ok=True)
 
-    os.remove(temp_resampled)
+    # Encode normalization into cache key
+    norm_tag = "norm" if normalize else "raw"
+    cached_file = os.path.join(
+        cache_path,
+        f"{base_name}_{stream_sr}hz_{norm_tag}.flac"
+    )
 
-def prepare_audio_hq(file, target_sr=48000):
-    base, ext = os.path.splitext(file)
-    temp_file = f"{base}_{target_sr}hz_normalized.wav"
-    if not os.path.exists(temp_file):
-        print(f"Resampling and normalizing: {file}")
-        ffmpeg_resample_and_normalize(file, temp_file, target_sr)
-    return temp_file
+    if not os.path.exists(cached_file):
+        cmd = [
+            "ffmpeg", "-y", "-i", file,
+            "-ar", str(stream_sr),
+            "-ac", "2"
+        ]
 
-def load_and_prepare_audio(file):
-    data, sr = sf.read(file, dtype='float32')
-    # ensure stereo
+        if normalize:
+            cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+
+        cmd += ["-c:a", "flac", cached_file]
+
+        rich.print(f"[Audio Cache] Creating cached FLAC: {cached_file}")
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        rich.print(f"[Audio Cache] Cache {'[red]MISS' if recurse == False else '[cyan]RELOAD'} [blue]{file}")
+        if debug:
+            cache_misses += 1
+    else:
+        rich.print(f"[Audio Cache] Cache [green]HIT [blue]{file}")
+
+    # Load cached FLAC (very fast)
+    try:
+        data, sr = sf.read(cached_file, dtype="float32")
+    except RuntimeError:
+        rich.print(f"[Audio Cache] Cached file {cached_file} [yellow]READ FAILURE")
+        invalidate = input("Invalidate cache and reload? (y/n) ").lower() in {"y", "yes"}
+        if invalidate:
+            os.remove(cached_file)
+            return load_audio_cached(file, normalize, True)
+        else:
+            raise
+
+    # Ensure stereo
     if data.ndim == 1:
         data = np.column_stack([data, data])
+
     if sr != stream_sr:
-        raise RuntimeError(f"Sample rate mismatch in {file}: {sr} Hz")
+        raise RuntimeError(
+            f"Sample rate mismatch in {file}: {sr} Hz"
+        )
+
     return data, sr
+
 
 # --------------------------
 # Your mapping / files
@@ -75,11 +129,23 @@ numpad_del_code = 83
 manual_files = {}
 
 def load():
+    global CACHE_PATH
     with open("sounds.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    for key in data["manual_files"].keys():
-        manual_files[int(key)] = data["manual_files"][key]
+    SOUND_DIR = data["config"]["sound_dir"]
+    CACHE_DIR = data["config"]["cache_dir"]
+
+    CACHE_PATH = os.path.join(SOUND_DIR, CACHE_DIR)
+
+    if args.cache == "delete":
+        for file in os.listdir(CACHE_PATH):
+            os.remove(os.path.join(CACHE_PATH, file))
+
+    manual_files.clear()
+
+    for key, value in data["manual_files"].items():
+        manual_files[int(key)] = value.strip() if isinstance(value, str) else None
 
 # --------------------------
 # Runtime audio structures
@@ -404,25 +470,47 @@ def reload_audio_files():
     """
     # Reload 200–209
     for i in range(10):
-        file = manual_files.get(i + 200)
-        if not file or not os.path.exists(file):
+        name = manual_files.get(i + 200)
+
+        if not name:
+            print(f"missing file for slot {i + 200}: {name}")
+            continue
+
+        file = os.path.join(SOUND_DIR, name)
+
+        if not os.path.exists(file):
             print(f"missing file for slot {i + 200}: {file}")
             continue
-        norm = prepare_audio_hq(file)
-        data, sr = load_and_prepare_audio(norm)
+
+        data, sr = load_audio_cached(file)
         audios[i + 200] = {"data": data, "sr": sr, "gain": 1.0}
         print(f"Reloaded num_pad_{i + 200}: {file}")
 
-    # Reload 0–69
+
+   # Reload 0–69
     for i in range(70):
-        file = manual_files.get(i)
-        if file and os.path.exists(file):
-            norm = prepare_audio_hq(file)
-            data, sr = load_and_prepare_audio(norm)
-            audios[i] = {"data": data, "sr": sr, "gain": audios.get(i, {}).get("gain", 1.0)}
-            print(f"Reloaded num_pad_{i}: {file}")
-        else:
+        name = manual_files.get(i)
+
+        if not name:
             audios[i] = None
+            print(f"File for {i} is missing.")
+            continue
+
+        file = os.path.join(SOUND_DIR, name)
+
+        if not os.path.exists(file):
+            audios[i] = None
+            print(f"File for {i} is missing: {file}")
+            continue
+
+        data, sr = load_audio_cached(file)
+        audios[i] = {
+            "data": data,
+            "sr": sr,
+            "gain": audios.get(i, {}).get("gain", 1.0),
+        }
+        print(f"Reloaded num_pad_{i}: {file}")
+
 
 # --------------------------
 # Reloaders
@@ -499,27 +587,30 @@ def main():
     # Load JSON file and manual_files
     load()
 
+    assert SOUND_DIR != ""
+    assert CACHE_DIR != ""
+    assert CACHE_PATH not in ["", f"{SOUND_DIR}", f"{CACHE_DIR}"], f"Cache Path is a dangerous path! ({CACHE_PATH})"
+
     # Preload a selection of sounds (200-209)
     for i in range(10):
         file = manual_files.get(i + 200)
-        if not file or not os.path.exists(file):
+        if not file or not os.path.exists(os.path.join(SOUND_DIR, file)):
             print(f"missing file for slot {i + 200}: {file}")
             continue
-        norm = prepare_audio_hq(file)
-        data, sr = load_and_prepare_audio(norm)
+        data, sr = load_audio_cached(os.path.join(SOUND_DIR, file))
         audios[i + 200] = {"data": data, "sr": sr, "gain": 1.0}
         print(f"Loaded num_pad_{i + 200}: {file}")
 
     # Preload normal slots 0-69
     for i in range(70):
         file = manual_files.get(i)
-        if file and os.path.exists(file):
-            norm = prepare_audio_hq(file)
-            data, sr = load_and_prepare_audio(norm)
+        if file and os.path.exists(os.path.join(SOUND_DIR, file)):
+            data, sr = load_audio_cached(os.path.join(SOUND_DIR, file))
             audios[i] = {"data": data, "sr": sr, "gain": 1.0}
             print(f"Loaded num_pad_{i}: {file}")
         else:
             audios[i] = None
+            print(f"File for {i} missing.")
 
     # Start the audio engine (device selection + streams + threads)
     start_audio_engine()

@@ -9,6 +9,8 @@ import random
 import subprocess
 import time
 import json
+from mutagen import File as MutagenFile
+from rich import print
 
 # --------------------------
 # Settings
@@ -22,39 +24,82 @@ gain_step = 0.05
 playlist_json = "playlists.json"  # JSON file with playlists
 shuffle_mode = False
 random_any_mode = False
-status_enabled = False
+status_enabled = True
+debug_status_enabled = False
 
-def ffmpeg_resample_and_normalize(input_file, output_file, target_sr=48000):
-    temp_resampled = output_file.replace("_normalized.wav", "_resampled.wav")
-    subprocess.run([
-        "ffmpeg", "-y", "-i", input_file,
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", temp_resampled
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def get_track_info(file, default_title="Unknown Track"):
+    """
+    Reads track title and artist from audio files (wav, mp3, flac, m4a, ogg).
+    Returns a tuple: (title, artist)
+    
+    - default_title: used if the track title is missing
+    - artist defaults to "UNKNOWN"
+    """
+    audio = MutagenFile(file, easy=True)
+    title = default_title
+    artist = "UNKNOWN"
 
-    subprocess.run([
-        "ffmpeg", "-y", "-i", temp_resampled,
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", output_file
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if audio is not None:
+        # 'title' and 'artist' are standardized in EasyID3/EasyTags
+        if "title" in audio and audio["title"]:
+            title = audio["title"][0]
+        if "artist" in audio and audio["artist"]:
+            artist = audio["artist"][0]
 
-    os.remove(temp_resampled)
+    return {"title":title, "artist":artist}
 
-def prepare_audio(file):
-    base, ext = os.path.splitext(file)
-    base = base.replace("_48000hz_normalized", "")
-    temp_file = f"{base}_{stream_sr}hz_normalized.wav"
-    if not os.path.exists(temp_file):
-        print(f"[QUEUE] Resampling and normalizing: {file}")
-        ffmpeg_resample_and_normalize(file, temp_file, stream_sr)
-    return temp_file
+def load_audio_ffmpeg(file):
+    """
+    Load audio via ffmpeg and return stereo float32 NumPy array.
+    
+    WAV:
+        - resample to target_sr
+        - loudness normalize
+    Non-WAV:
+        - resample only (no loudnorm)
+    """
 
-def load_audio(file):
-    data, sr = sf.read(file, dtype='float32')
-    if data.ndim == 1:
-        data = np.column_stack([data, data])
-    if sr != stream_sr:
-        raise RuntimeError(f"Sample rate mismatch: {sr} != {stream_sr}")
-    return data
+    ext = os.path.splitext(file)[1].lower()
+
+    # Base ffmpeg args
+    cmd = [
+        "ffmpeg",
+        "-i", file,
+        "-ar", str(stream_sr),
+        "-ac", "2",
+    ]
+
+    # Apply loudness normalization ONLY for WAVs
+    if ext == ".wav":
+        cmd += [
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11"
+        ]
+
+    # Output raw float32 PCM to stdout
+    cmd += [
+        "-f", "f32le",
+        "pipe:1"
+    ]
+
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True
+    )
+
+    raw = proc.stdout
+
+    # Convert to NumPy array
+    data = np.frombuffer(raw, dtype=np.float32).copy()
+
+    # Ensure stereo
+    if data.size % 2 != 0:
+        raise RuntimeError("Audio stream is not stereo-aligned")
+
+    data = data.reshape(-1, 2)
+    info = get_track_info(file, os.path.basename(file))
+    return info, data
 
 def format_time(seconds):
     m, s = divmod(int(seconds), 60)
@@ -120,28 +165,30 @@ def queue_song(index):
         return
     if shuffle_mode and not random_any_mode:
         index = random.randint(0, len(current_playlist) - 1)
-    file = prepare_audio(current_playlist[index])
-    data = load_audio(file)
+    info, data = load_audio_ffmpeg(current_playlist[index])
     with playing_lock:
         playing_song["data"] = data
         playing_song["pos"] = 0
-        playing_song["name"] = os.path.basename(file)
-    print(f"[QUEUE] {os.path.basename(file)} (index {index})")
+        playing_song["name"] = os.path.basename(current_playlist[index])
+        playing_song["title"] = info["title"]
+        playing_song["artist"] = info["artist"]
+    print(f"[[QUEUE]]] {os.path.basename(current_playlist[index])} (index {index})")
     preload_next(index)
 
 def preload_next(index):
+    global preload_song_metadata
     if not current_playlist or random_any_mode:
         return
     next_index = (index + 1) % len(current_playlist)
-    file = prepare_audio(current_playlist[next_index])
-    data = load_audio(file)
+    info, data = load_audio_ffmpeg(current_playlist[index])
     with playing_lock:
         playing_song["preloaded"] = {
             "data": data,
-            "name": os.path.basename(file),
+            "name": os.path.basename(current_playlist[next_index]),
             "index": next_index
         }
-    print(f"[PRELOAD DONE] idx={next_index} -> {os.path.basename(file)}")
+    preload_song_metadata = info
+    print(f"[PRELOAD DONE] idx={next_index} -> {os.path.basename(current_playlist[next_index])}")
 
 def play_next():
     global current_index
@@ -151,12 +198,11 @@ def play_next():
             print("[ERROR] No tracks anywhere.")
             return
         choice = random.choice(all_tracks)
-        file = prepare_audio(choice)
-        data = load_audio(file)
+        info, data = load_audio_ffmpeg(choice)
         with playing_lock:
             playing_song["data"] = data
             playing_song["pos"] = 0
-            playing_song["name"] = os.path.basename(file)
+            playing_song["name"] = info["title"]
         print(f"[RANDOM-ANY] {playing_song['name']}")
         return
     if shuffle_mode:
@@ -200,20 +246,24 @@ def change_volume(delta):
 # --------------------------
 # Status printer
 # --------------------------
-def status_loop():
-    while True:
-        with playing_lock:
-            if playing_song["data"] is not None:
-                if status_enabled:
-                    pos = playing_song["pos"]
-                    total = playing_song["data"].shape[0]
+def status():
+    with playing_lock:
+        if playing_song["data"] is not None:
+            if status_enabled:
+                pos = playing_song["pos"]
+                total = playing_song["data"].shape[0]
+                if debug_status_enabled:                    
                     perc = pos / total * 100
                     pre = playing_song["preloaded"]
                     pre_info = f"idx={pre['index']} name={pre['name']}" if pre else "None"
                     print(f"[STATUS] pl={current_playlist_name} idx={current_index} name={playing_song['name']} "
-                          f"pos={format_time(pos/stream_sr)}/{format_time(total/stream_sr)} ({perc:.0f}%) "
-                          f"| paused={paused} shuffle={shuffle_mode} random={random_any_mode} | preloaded {pre_info}")
-        time.sleep(3)
+                        f"pos={format_time(pos/stream_sr)}/{format_time(total/stream_sr)} ({perc:.0f}%) "
+                        f"| paused={paused} shuffle={shuffle_mode} random={random_any_mode} | preloaded {pre_info}")
+                else:
+                    print(f"[red]{current_playlist_name}[white]/[green]{playing_song['title']}"
+                            f"\n[white]by [blue]{playing_song['artist']}"
+                            f"\n[red]{format_time(pos/stream_sr)}[white]/[red]{format_time(total/stream_sr)}"
+                            f"\n[red]Shuffle: [green]{'on' if shuffle_mode == True else 'off'}\n[red]Random-Any: [green]{'on' if random_any_mode == True else 'off'}")
 
 # --------------------------
 # Control loop (numpad)
@@ -265,7 +315,7 @@ def control_loop():
 # CLI loop (stdin commands)
 # --------------------------
 def cli_loop():
-    global shuffle_mode, random_any_mode
+    global shuffle_mode, random_any_mode, master_gain
     while True:
         try:
             cmd = input(">> ").strip().lower()
@@ -275,24 +325,6 @@ def cli_loop():
         if cmd in ("q", "quit", "exit"):
             print("[CLI] Exiting...")
             os._exit(0)
-
-
-        elif cmd == "status":
-
-            with playing_lock:
-
-                if playing_song["data"] is not None:
-
-                    pos = playing_song["pos"] / stream_sr
-
-                    total = playing_song["data"].shape[0] / stream_sr
-
-                    print(f"[CLI] Now playing {playing_song['name']} @ {format_time(pos)}/{format_time(total)}")
-
-                else:
-
-                    print("[CLI] Nothing playing.")
-
 
         elif cmd.startswith("playlist "):
             name = cmd.split(" ", 1)[1].strip()
@@ -323,10 +355,12 @@ def cli_loop():
 
         elif cmd.startswith("vol "):
             try:
-                amt = float(cmd.split(" ", 1)[1])
-                change_volume(amt)
-            except Exception:
-                print("[CLI] Usage: vol +0.1 or vol -0.1")
+                master_gain = float(cmd.split()[1])
+            except Exception as e:
+                print(f"[CLI] Error {e} occurred.")
+
+        elif cmd == "status":
+            status()
 
         else:
             print("[CLI] Unknown command:", cmd)
@@ -393,7 +427,6 @@ if __name__ == "__main__":
     print("Volume: Numpad5=up, Numpad2=down")
     print("CLI commands: playlists, playlist NAME, next, prev, pause, shuffle, random, vol +/-")
 
-    threading.Thread(target=status_loop, daemon=True).start()
     threading.Thread(target=control_loop, daemon=True).start()
     threading.Thread(target=playback_loop, args=(dev1, dev2), daemon=True).start()
     threading.Thread(target=cli_loop, daemon=True).start()

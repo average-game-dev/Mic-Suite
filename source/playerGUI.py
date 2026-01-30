@@ -6,13 +6,36 @@ import threading
 import subprocess
 import time
 import json
+import keyboard
+from keymods import is_numlock_on
 from PySide6.QtWidgets import (
     QWidget, QLabel, QSlider, QComboBox, QPushButton,
     QHBoxLayout, QVBoxLayout, QApplication
 )
 from PySide6.QtCore import Qt, QSize, QTimer
+from mutagen import File as MutagenFile
+from rich import print
 import random
 import sys
+
+color = {
+    "red": {
+        "start": '<span style="color:red">',
+        "end": '</span>'
+    },
+    "white": {
+        "start": '<span style="color:white">',
+        "end": '</span>'
+    },
+    "green": {
+        "start": '<span style="color:green">',
+        "end": '</span>'
+    },
+    "blue": {
+        "start": '<span style="color:blue">',
+        "end": '</span>'
+    }
+}
 
 # --------------------------
 # Settings
@@ -42,35 +65,79 @@ playlists = {}
 # --------------------------
 # Audio helpers
 # --------------------------
-def ffmpeg_resample_and_normalize(input_file, output_file, target_sr=48000):
-    temp_resampled = output_file.replace("_normalized.wav", "_resampled.wav")
-    subprocess.run([
-        "ffmpeg", "-y", "-i", input_file,
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", temp_resampled
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run([
-        "ffmpeg", "-y", "-i", temp_resampled,
-        "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",
-        "-ar", str(target_sr), "-ac", "2", "-c:a", "pcm_f32le", output_file
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    os.remove(temp_resampled)
+def get_track_info(file, default_title="Unknown Track"):
+    """
+    Reads track title and artist from audio files (wav, mp3, flac, m4a, ogg).
+    Returns a tuple: (title, artist)
+    
+    - default_title: used if the track title is missing
+    - artist defaults to "UNKNOWN"
+    """
+    audio = MutagenFile(file, easy=True)
+    title = default_title
+    artist = "UNKNOWN"
 
-def prepare_audio(file):
-    base, ext = os.path.splitext(file)
-    base = base.replace("_48000hz_normalized", "")
-    temp_file = f"{base}_{stream_sr}hz_normalized.wav"
-    if not os.path.exists(temp_file):
-        print(f"[QUEUE] Resampling and normalizing: {file}")
-        ffmpeg_resample_and_normalize(file, temp_file, stream_sr)
-    return temp_file
+    if audio is not None:
+        # 'title' and 'artist' are standardized in EasyID3/EasyTags
+        if "title" in audio and audio["title"]:
+            title = audio["title"][0]
+        if "artist" in audio and audio["artist"]:
+            artist = audio["artist"][0]
 
-def load_audio(file):
-    data, sr = sf.read(file, dtype='float32')
-    if data.ndim == 1:
-        data = np.column_stack([data, data])
-    if sr != stream_sr:
-        raise RuntimeError(f"Sample rate mismatch: {sr} != {stream_sr}")
-    return data
+    return {"title":title, "artist":artist}
+
+def load_audio_ffmpeg(file):
+    """
+    Load audio via ffmpeg and return stereo float32 NumPy array.
+    
+    WAV:
+        - resample to target_sr
+        - loudness normalize
+    Non-WAV:
+        - resample only (no loudnorm)
+    """
+
+    ext = os.path.splitext(file)[1].lower()
+
+    # Base ffmpeg args
+    cmd = [
+        "ffmpeg",
+        "-i", file,
+        "-ar", str(stream_sr),
+        "-ac", "2",
+    ]
+
+    # Apply loudness normalization ONLY for WAVs
+    if ext == ".wav":
+        cmd += [
+            "-af", "loudnorm=I=-16:TP=-1.5:LRA=11"
+        ]
+
+    # Output raw float32 PCM to stdout
+    cmd += [
+        "-f", "f32le",
+        "pipe:1"
+    ]
+
+    proc = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=True
+    )
+
+    raw = proc.stdout
+
+    # Convert to NumPy array
+    data = np.frombuffer(raw, dtype=np.float32).copy()
+
+    # Ensure stereo
+    if data.size % 2 != 0:
+        raise RuntimeError("Audio stream is not stereo-aligned")
+
+    data = data.reshape(-1, 2)
+    info = get_track_info(file, os.path.basename(file))
+    return info, data
 
 def format_time(seconds):
     m, s = divmod(int(seconds), 60)
@@ -117,24 +184,24 @@ def queue_song(index):
         return
     if shuffle_mode and not random_any_mode:
         index = random.randint(0, len(current_playlist) - 1)
-    file = prepare_audio(current_playlist[index])
-    data = load_audio(file)
+    info, data = load_audio_ffmpeg(current_playlist[index])
     with playing_lock:
         playing_song["data"] = data
         playing_song["pos"] = 0
-        playing_song["name"] = os.path.basename(file)
+        playing_song["name"] = info["title"]
+        playing_song["path"] = current_playlist[index]
     preload_next(index)
 
 def preload_next(index):
     if not current_playlist or random_any_mode:
         return
     next_index = (index + 1) % len(current_playlist)
-    file = prepare_audio(current_playlist[next_index])
-    data = load_audio(file)
+    info, data = load_audio_ffmpeg(current_playlist[next_index])
     with playing_lock:
         playing_song["preloaded"] = {
             "data": data,
-            "name": os.path.basename(file),
+            "name": info["title"],
+            "path": current_playlist[next_index],
             "index": next_index
         }
 
@@ -145,12 +212,12 @@ def play_next():
         if not all_tracks:
             return
         choice = random.choice(all_tracks)
-        file = prepare_audio(choice)
-        data = load_audio(file)
+        info, data = load_audio_ffmpeg(choice)
         with playing_lock:
             playing_song["data"] = data
             playing_song["pos"] = 0
-            playing_song["name"] = os.path.basename(file)
+            playing_song["name"] = info["title"]
+            playing_song["path"] = choice
         return
     if shuffle_mode:
         current_index = random.randint(0, len(current_playlist) - 1)
@@ -223,6 +290,52 @@ def playback_loop(device1, device2):
 
             if need_next:
                 play_next()
+
+# --------------------------
+# Control loop (numpad)
+# --------------------------
+def control_loop():
+    global shuffle_mode, random_any_mode
+    while True:
+        if keyboard.is_pressed(83):  # So that music player operations don't act weirdly with normal numpad functions.
+            if is_numlock_on() and keyboard.is_pressed('num 7'):
+                play_prev()
+                while keyboard.is_pressed('num 7'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 8'):
+                toggle_pause()
+                while keyboard.is_pressed('num 8'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 9'):
+                play_next()
+                while keyboard.is_pressed('num 9'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num /'):
+                shuffle_mode = not shuffle_mode
+                print("Shuffle mode:", shuffle_mode)
+                while keyboard.is_pressed('num /'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num *'):
+                random_any_mode = not random_any_mode
+                print("Random-anywhere mode:", random_any_mode)
+                while keyboard.is_pressed('num *'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 4'):
+                seek_seconds(-10)
+                while keyboard.is_pressed('num 4'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 1'):
+                seek_seconds(-30)
+                while keyboard.is_pressed('num 1'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 6'):
+                seek_seconds(10)
+                while keyboard.is_pressed('num 6'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 3'):
+                seek_seconds(30)
+                while keyboard.is_pressed('num 3'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 5'):
+                change_volume(gain_step)
+                while keyboard.is_pressed('num 5'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num 2'):
+                change_volume(-gain_step)
+                while keyboard.is_pressed('num 2'): time.sleep(0.05)
+            elif is_numlock_on() and keyboard.is_pressed('num -'):
+                status_enable = not status_enable
+        time.sleep(0.05)
 
 # --------------------------
 # GUI
@@ -356,6 +469,9 @@ class PlayerGUI(QWidget):
         self.resize(QSize(400,250))
         self.show()
 
+        self.control_thread = threading.Thread(target=control_loop, daemon=True)
+        self.control_thread.start()
+
         # Timer for status update
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_status)
@@ -434,7 +550,7 @@ class PlayerGUI(QWidget):
             if playing_song["data"] is not None:
                 pos = playing_song["pos"] / stream_sr
                 total = playing_song["data"].shape[0] / stream_sr
-                self.status_label.setText(f"{self.current_playlist_name} | {playing_song['name']} "
+                self.status_label.setText(f"{color['red']['start']}{self.current_playlist_name}{color['red']['end']}/{color['green']['start']}{playing_song['name']}{color['green']['end']} "
                                           f"{format_time(pos)}/{format_time(total)}")
                 self.progress_slider.setEnabled(True)
                 self.progress_slider.setValue(int((pos / total) * 1000))

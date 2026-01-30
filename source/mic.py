@@ -61,10 +61,11 @@ class MeterOverlay(QtWidgets.QWidget):
         self.setWindowFlags(
             QtCore.Qt.FramelessWindowHint |
             QtCore.Qt.WindowStaysOnTopHint |
-            QtCore.Qt.Tool
+            QtCore.Qt.Tool |
+            QtCore.Qt.WindowTransparentForInput
         )
+
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
 
         self.resize(360, 24)
         self.move(50, 50)

@@ -27,6 +27,7 @@ def get_packages():
         "PySide6",
         "soundfile",
         "keyboard",
+        "yt-dlp"
     ]
 
     if AI_FLAG: # heavy packages only used for AI stuff
