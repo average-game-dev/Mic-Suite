@@ -16,8 +16,7 @@ def create_env(path):
 
 def pip_install(packages):
     pip_exe = os.path.join(ENV_DIR, "Scripts" if os.name == "nt" else "bin", "pip")
-    for pkg in packages:
-        subprocess.check_call([pip_exe, "install", pkg])
+    subprocess.check_call([pip_exe, "install"] + packages)
 
 def get_packages():
     
@@ -27,7 +26,11 @@ def get_packages():
         "PySide6",
         "soundfile",
         "keyboard",
-        "yt-dlp"
+        "yt-dlp",
+        "requests",
+        "rich",
+        "fastapi",
+        "uvicorn"
     ]
 
     if AI_FLAG: # heavy packages only used for AI stuff
@@ -60,4 +63,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
