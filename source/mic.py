@@ -176,8 +176,15 @@ def command_loop():
 
         elif cmd.startswith("effect"):
             if cmd.split()[1] == "param":
+                if len(cmd.split()) < 4:
+                    print("Error! To set a parameter you need at least four terms!")
+                    continue
                 parameter = cmd.split()[2]
                 if parameter in EFFECT_PARAMS.keys():
+                    try:
+                        float(cmd.split()[3])
+                    except Exception as e:
+                        print("Error! You have to set the values of parameters to numbers or floats! No characters!")
                     EFFECT_PARAMS[parameter] = float(cmd.split()[3])
                     continue
                 else:

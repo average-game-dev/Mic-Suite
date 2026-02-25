@@ -30,7 +30,8 @@ def get_packages():
         "requests",
         "rich",
         "fastapi",
-        "uvicorn"
+        "uvicorn",
+        "numba"
     ]
 
     if AI_FLAG: # heavy packages only used for AI stuff
