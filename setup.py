@@ -61,7 +61,11 @@ def main():
         pass
     with open("playlists.json", "a"):
         pass
-
+    with open("word.json", "a"):
+        pass
+    os.makedirs("sounds", exist_ok=True)
+    os.makedirs("songs", exist_ok=True)
+    os.makedirs("words", exist_ok=True)
 
 if __name__ == "__main__":
     main()
