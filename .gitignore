@@ -11,7 +11,7 @@ words/*
 sound_list.txt
 playlists.json
 sounds.json
-words.json
+word.json
 cookies.txt
 cookies.sqlite
 *.dll
