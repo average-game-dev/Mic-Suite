@@ -7,6 +7,8 @@ from PySide6 import QtWidgets, QtCore, QtGui
 import time
 import sys
 from collections import deque
+from effects import EFFECTS, EFFECT_PARAMS
+
 
 # ---------------- Globals & Thread-safety ----------------
 MIC_GAIN = 1.0
@@ -18,17 +20,42 @@ volume_lock = threading.Lock()
 mic_on = True
 mic_lock = threading.Lock()
 
-mic_queue = deque()  # holds incoming chunks
-mic_queue_lock = threading.Lock()
-
 stop_event = threading.Event()
 
+# ---------------- Effect System ----------------
+EFFECT_ENABLED = False
+CURRENT_EFFECTS = [] # list of callables 
+effect_lock = threading.Lock()
+
+def set_effect(fns):
+    """
+    fns: list of effect functions, or None/[] to disable
+    """
+    global CURRENT_EFFECTS, EFFECT_ENABLED
+    with effect_lock:
+        if not fns:
+            CURRENT_EFFECTS = []
+            EFFECT_ENABLED = False
+        else:
+            CURRENT_EFFECTS = fns
+            EFFECT_ENABLED = True
+
+def process_effect(chunk):
+    with effect_lock:
+        if not EFFECT_ENABLED or not CURRENT_EFFECTS:
+            return chunk
+
+        out = chunk
+        for fn in CURRENT_EFFECTS:
+            out = fn(out)
+        return out
+
+# ---------------- Signal ----------------
 def handle_sigint(signum, frame):
     stop_event.set()
     QtWidgets.QApplication.quit()
 
-# helpers
-
+# ---------------- Scroll Lock ----------------
 def scroll_lock_updater():
     global mic_on
     last_state = True
@@ -40,20 +67,11 @@ def scroll_lock_updater():
             with mic_lock:
                 mic_on = new_state
 
-            if not new_state:
-                # FLUSH ALL AUDIO
-                with mic_queue_lock:
-                    mic_queue.clear()
-                ring_buffer.clear()
-
         last_state = new_state
         time.sleep(0.01)
 
-# UI
 
-def rgb(r, g, b):
-    return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
-
+# ---------------- UI ----------------
 class MeterOverlay(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -66,7 +84,6 @@ class MeterOverlay(QtWidgets.QWidget):
         )
 
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-
         self.resize(360, 24)
         self.move(50, 50)
 
@@ -101,95 +118,45 @@ class MeterOverlay(QtWidgets.QWidget):
 
         painter.fillRect(0, 0, fill, 24, color)
 
-# ---------------- Audio callbacks ----------------
-def mic_callback(indata, frames, time_info, status):
+# ---------------- Audio ----------------
+def duplex_callback(indata, outdata, frames, time_info, status):
     if status:
-        print("Mic callback status:", status, file=sys.stderr)
+        print("Callback status:", status)
 
     with mic_lock:
         if not mic_on:
-            return  # drop input ONLY when muted
+            outdata[:] = 0
+            return
 
     with mic_gain_lock:
         gain = MIC_GAIN
 
     chunk = indata.copy() * gain
 
-    with mic_queue_lock:
-        mic_queue.append(chunk)
-
+    # volume meter
     global volume
     with volume_lock:
         volume_val = float(np.sqrt(np.mean(chunk**2)))
         volume = max(volume_val, volume * 0.9)
 
-# Ring buffer for leftover samples
-ring_buffer = deque()
+    # apply effects
+    chunk = process_effect(chunk)
 
-def out_callback(outdata, frames, time_info, status):
-    global ring_buffer
+    outdata[:] = chunk
 
-    if status:
-        print("Out callback status:", status, file=sys.stderr)
-
-    with mic_lock:
-        muted = not mic_on
-
-    if muted:
-        with mic_queue_lock:
-            mic_queue.clear()
-        ring_buffer.clear()
-        outdata[:] = 0
-        return
-
-    chunks = []
-    total = 0
-
-    with mic_queue_lock:
-        while ring_buffer and total < frames:
-            c = ring_buffer.popleft()
-            chunks.append(c)
-            total += len(c)
-
-        while mic_queue and total < frames:
-            c = mic_queue.popleft()
-            chunks.append(c)
-            total += len(c)
-
-    if chunks:
-        chunk = np.concatenate(chunks, axis=0)
-    else:
-        chunk = np.zeros((frames, 1), dtype='float32')
-
-    if chunk.shape[0] < frames:
-        chunk = np.pad(chunk, ((0, frames - chunk.shape[0]), (0, 0)))
-
-    outdata[:] = chunk[:frames]
-
-    leftover = chunk[frames:]
-    if len(leftover):
-        ring_buffer.append(leftover)
-
-
-# ---------------- Command loop ----------------
+# ---------------- Command Loop ----------------
 def command_loop():
     global MIC_GAIN
-    print("Commands: gain <float>, help, quit")
+
+    print("Commands: gain <float>, effect <name>, help, quit")
 
     while not stop_event.is_set():
-        try:
-            line = sys.stdin.readline()
-            if not line:  # EOF
-                stop_event.set()
-                break
-        except KeyboardInterrupt:
+        line = sys.stdin.readline()
+        if not line:
             stop_event.set()
             break
 
         cmd = line.strip()
-
-        if cmd == "":
-            continue
 
         if cmd == "quit":
             stop_event.set()
@@ -207,20 +174,65 @@ def command_loop():
             except ValueError:
                 print("Invalid gain")
 
+        elif cmd.startswith("effect"):
+            if cmd.split()[1] == "param":
+                parameter = cmd.split()[2]
+                if parameter in EFFECT_PARAMS.keys():
+                    EFFECT_PARAMS[parameter] = float(cmd.split()[3])
+                    continue
+                else:
+                    print(f"Error! Effect Parameter {parameter} not found! Avaliable effects include {EFFECT_PARAMS.keys()}")
+                    continue
+
+            parts = cmd.split(maxsplit=1)
+            if len(parts) != 2:
+                print(f"Usage: effect <name[,name2,name3,...]|off>")
+                continue
+
+            arg = parts[1].lower()
+
+            if arg == "off":
+                set_effect(None)
+                print("Effect disabled")
+                continue
+
+            names = [n.strip() for n in arg.split(",") if n.strip()]
+
+            fns = []
+            for n in names:
+                fn = EFFECTS.get(n)
+                if not fn:
+                    print(f"Unknown effect: {n}")
+                    print("Available:", ", ".join(EFFECTS.keys()))
+                    fns = []
+                    break
+                fns.append(fn)
+
+            if fns:
+                set_effect(fns)
+                print("Effect chain:", " -> ".join(names))
+
         elif cmd == "help":
-            print("gain <float> — set mic gain")
-            print("quit — exit")
+            print("gain <float>")
+            print(f"effect <{'|'.join(EFFECTS.keys())}|off>")
+            print("quit")
+
 
         else:
             print("Unknown command")
 
-
 # ---------------- Main ----------------
 def main():
-    print("=== Devices ===")
-    for idx, d in enumerate(sd.query_devices()):
-        print(f"[{idx}] {d['name']} (I/O: {d['max_input_channels']}/{d['max_output_channels']}) ({d['hostapi']})")
+    print("=== Devices ===")    
+    hostapis = sd.query_hostapis()
+    devices = sd.query_devices()
 
+    for idx, api in enumerate(hostapis):
+        print(f"[{idx}] Host API: {api['name']}")
+        for dev_id in api['devices']:
+            dev = devices[dev_id]
+            print(f"    [{dev_id}] {dev['name']} (I/O: {dev['max_input_channels']}/{dev['max_output_channels']})")
+        print()
     try:
         mic_id = int(input("Enter your mic device ID: "))
         out_id = int(input("Enter output device ID: "))
@@ -229,29 +241,28 @@ def main():
         return
 
     samplerate = 48000
-    blocksize = 256  # small blocksize for low latency
+    blocksize = 256
 
     try:
-        in_stream = sd.InputStream(samplerate=samplerate, device=mic_id, channels=1,
-                                   blocksize=blocksize, callback=mic_callback,
-                                   dtype='float32', latency='low')
-        out_stream = sd.OutputStream(samplerate=samplerate, device=out_id, channels=1,
-                                     blocksize=blocksize, callback=out_callback,
-                                     dtype='float32', latency='low')
-        in_stream.start()
-        out_stream.start()
+        stream = sd.Stream(
+            samplerate=samplerate,
+            blocksize=128,  # lower for latency
+            device=(mic_id, out_id),
+            channels=1,
+            latency='low',
+            dtype='float32',
+            callback=duplex_callback
+        )
+        stream.start()
     except Exception as e:
-        print("Failed to start streams:", e)
+        print("Failed to start stream:", e)
         return
 
-    scroll_lock_updater_thread = threading.Thread(target=scroll_lock_updater, daemon=True)
-    scroll_lock_updater_thread.start()
 
-    cmd_thread = threading.Thread(target=command_loop, daemon=True)
-    cmd_thread.start()
+    threading.Thread(target=scroll_lock_updater, daemon=True).start()
+    threading.Thread(target=command_loop, daemon=True).start()
 
     app = QtWidgets.QApplication(sys.argv)
-
     signal.signal(signal.SIGINT, handle_sigint)
 
     overlay = MeterOverlay()
@@ -262,15 +273,11 @@ def main():
     finally:
         stop_event.set()
         try:
-            in_stream.stop()
-            in_stream.close()
+            stream.stop()
+            stream.close()
         except Exception:
             pass
-        try:
-            out_stream.stop()
-            out_stream.close()
-        except Exception:
-            pass
+
         print("Shutting down...")
 
 if __name__ == "__main__":

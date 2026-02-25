@@ -7,6 +7,7 @@ presound/*
 downloads/*
 songs/*
 sounds/*
+words/*
 sound_list.txt
 playlists.json
 sounds.json

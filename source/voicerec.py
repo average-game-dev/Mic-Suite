@@ -15,6 +15,33 @@ CHANNELS = 1
 KEY = '`'  # hold to speak
 POST_RELEASE_SECONDS = 0.25  # record extra after release
 
+# ------------------- INPUT DEVICE SELECTION -------------------
+
+def choose_input_device():
+    print("=== Input Devices (Microphones) ===")
+    devs = sd.query_devices()
+    input_devs = [d for d in devs if d['max_input_channels'] > 0]
+
+    for idx, d in enumerate(input_devs):
+        print(f"[{idx}] {d['name']} (hostapi={d['hostapi']}) "
+              f"(I/O: {d['max_input_channels']}/{d['max_output_channels']})")
+
+    try:
+        choice = int(input("Select microphone index: ").strip())
+        mic_name = input_devs[choice]['name']
+        return mic_name
+    except (ValueError, IndexError):
+        print("Invalid microphone selection.")
+        exit(1)
+
+def find_input_device(name_substring):
+    devices = sd.query_devices()
+    for idx, dev in enumerate(devices):
+        if dev.get("max_input_channels", 0) > 0:
+            if name_substring.lower() in dev["name"].lower():
+                return idx
+    raise RuntimeError(f"Input device not found: {name_substring}")
+
 # ------------------- OUTPUT DEVICE SELECTION -------------------
 
 def choose_output_devices():
@@ -52,12 +79,16 @@ def get_device_ids():
     d2 = find_output_device(DEVICE_2_NAME)
     return d1, d2
 
+def get_input_device_id():
+    return find_input_device(INPUT_DEVICE_NAME)
+
 # ------------------- STT -------------------
 
 recognizer = sr.Recognizer()
 
 def record_while_held(key=KEY, post_release=POST_RELEASE_SECONDS):
     frames = []
+    input_device_id = get_input_device_id()
 
     def callback(indata, frames_count, time, status):
         if status:
@@ -65,13 +96,24 @@ def record_while_held(key=KEY, post_release=POST_RELEASE_SECONDS):
         frames.append(indata.copy())
 
     print(f"Holding `{key}` to record...")
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, callback=callback):
+    with sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=CHANNELS,
+        device=input_device_id,
+        callback=callback
+    ):
         while keyboard.is_pressed(key):
             sd.sleep(20)
 
         extra_frames = int(post_release * SAMPLE_RATE)
         print(f"Recording extra {post_release} seconds...")
-        extra_data = sd.rec(extra_frames, samplerate=SAMPLE_RATE, channels=CHANNELS, dtype='float32')
+        extra_data = sd.rec(
+            extra_frames,
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype='float32',
+            device=input_device_id
+        )
         sd.wait()
         frames.append(extra_data)
 
@@ -135,9 +177,9 @@ def select_voice():
 # ------------------- MAIN LOOP -------------------
 
 def main():
-    global DEVICE_1_NAME, DEVICE_2_NAME
+    global DEVICE_1_NAME, DEVICE_2_NAME, INPUT_DEVICE_NAME
 
-    # ✅ FIX: Device selection happens ONLY ONCE now
+    INPUT_DEVICE_NAME = choose_input_device()
     DEVICE_1_NAME, DEVICE_2_NAME = choose_output_devices()
 
     selected_voice = select_voice()

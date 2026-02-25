@@ -59,6 +59,8 @@ def main():
         pass
     with open("playlists.json", "a"):
         pass
+    with open("playlists.json", "a"):
+        pass
 
 
 if __name__ == "__main__":
