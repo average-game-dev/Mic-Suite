@@ -13,6 +13,7 @@ from keymods import is_numlock_on
 import rich
 from sys import argv
 import argparse
+from effects import EFFECTS, EFFECT_PARAMS
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true")
@@ -37,6 +38,35 @@ master_gain = 1.0  # default master gain
 SOUND_DIR = "sounds"
 CACHE_DIR = "cache"
 CACHE_PATH = ""
+
+# EFFECTS!
+EFFECT_ENABLED = False
+CURRENT_EFFECTS = [] # list of callables 
+effect_lock = threading.Lock()
+
+def set_effect(fns):
+    """
+    fns: list of effect functions, or None/[] to disable
+    """
+    global CURRENT_EFFECTS, EFFECT_ENABLED
+    with effect_lock:
+        if not fns:
+            CURRENT_EFFECTS = []
+            EFFECT_ENABLED = False
+        else:
+            CURRENT_EFFECTS = fns
+            EFFECT_ENABLED = True
+
+def process_effect(chunk):
+    with effect_lock:
+        if not EFFECT_ENABLED or not CURRENT_EFFECTS:
+            return chunk
+
+        out = chunk
+        for fn in CURRENT_EFFECTS:
+            out = fn(out)
+        return out
+
 
 # --------------------------
 # Locks and stuff
@@ -270,6 +300,7 @@ def master_callback(outdata, frames, time_info, status):
     # final clipping to avoid distortion
     np.clip(out, -1.0, 1.0, out=out)
 
+    out = process_effect(out)
     # write to outdata (this is the buffer the sounddevice will output)
     outdata[:] = out
 
@@ -429,7 +460,7 @@ def gain_control_loop():
     global master_gain
     while True:
         try:
-            cmd = input(">> ").strip().lower()
+            cmd = input(">> ").strip()
         except EOFError:
             break
         if not cmd:
@@ -456,6 +487,51 @@ def gain_control_loop():
             mode = cmd.split()[1]
             
             reload(mode)
+
+        elif cmd.startswith("effect"):
+            if cmd.split()[1] == "param":
+                if len(cmd.split()) < 4:
+                    print("Error! To set a parameter you need at least four terms!")
+                    continue
+                parameter = cmd.split()[2]
+                if parameter in EFFECT_PARAMS.keys():
+                    try:
+                        float(cmd.split()[3])
+                    except Exception as e:
+                        print("Error! You have to set the values of parameters to numbers or floats! No characters!")
+                    EFFECT_PARAMS[parameter] = float(cmd.split()[3])
+                    continue
+                else:
+                    print(f"Error! Effect Parameter {parameter} not found! Avaliable effects include {EFFECT_PARAMS.keys()}")
+                    continue
+
+            parts = cmd.split(maxsplit=1)
+            if len(parts) != 2:
+                print(f"Usage: effect <name[,name2,name3,...]|off>")
+                continue
+
+            arg = parts[1].lower()
+
+            if arg == "off":
+                set_effect(None)
+                print("Effect disabled")
+                continue
+
+            names = [n.strip() for n in arg.split(",") if n.strip()]
+
+            fns = []
+            for n in names:
+                fn = EFFECTS.get(n)
+                if not fn:
+                    print(f"Unknown effect: {n}")
+                    print("Available:", ", ".join(EFFECTS.keys()))
+                    fns = []
+                    break
+                fns.append(fn)
+
+            if fns:
+                set_effect(fns)
+                print("Effect chain:", " -> ".join(names))
                 
         else:
             print("Commands: master <value>, gain <index> <value>")

@@ -14,6 +14,8 @@ sounds.json
 word.json
 cookies.txt
 cookies.sqlite
+*.flac
+*.wav
 *.dll
 *.exp
 *.lib

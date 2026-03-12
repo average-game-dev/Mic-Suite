@@ -2,6 +2,14 @@ import numpy as np
 from numba import njit
 
 EFFECT_PARAMS = {
+    # ECHO
+    "ECHO_ROOM_SIZE": 4800,   # samples (~0.1s at 48kHz)
+    "ECHO_WET": 0.25,         # echo volume
+    "ECHO_FEEDBACK": 0.3,     # feedback amount
+    "ECHO_DECAY": 0.6,        # distance decay per echo
+    "ECHO_MIX": 0.8,          # blend original+effect
+    "ECHO_CUTOFF": 0.3,       # low-pass: smaller = muffled / far away
+    
     # BITCRUSH
     "BITCRUSH_BITS": 8,
     "BITCRUSH_DOWNSAMPLE": 6,
@@ -436,5 +444,5 @@ EFFECTS = {
     "saturation": effect_saturation,
     "reverb": effect_reverb,
     "pitch": effect_granular_pitch,
-    "granular": effect_granular,
+    "granular": effect_granular
 }

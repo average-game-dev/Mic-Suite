@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="1000.0001"
+   height="1000.0001"
+   viewBox="0 0 264.58335 264.58335"
+   version="1.1"
+   id="svg1"
+   inkscape:export-filename="scrolllockOFF.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="px">
+    <inkscape:page
+       x="0"
+       y="0"
+       width="264.58334"
+       height="264.58334"
+       id="page2"
+       margin="0"
+       bleed="0" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <rect
+       x="77.130188"
+       y="680.39844"
+       width="844.30011"
+       height="239.65451"
+       id="rect5" />
+    <inkscape:path-effect
+       effect="fillet_chamfer"
+       id="path-effect2"
+       is_visible="true"
+       lpeversion="1"
+       nodesatellites_param="F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1 @ F,0,0,1,0,0,0,1"
+       radius="0"
+       unit="px"
+       method="auto"
+       mode="F"
+       chamfer_steps="1"
+       flexible="false"
+       use_knot_distance="true"
+       apply_no_radius="true"
+       apply_with_radius="true"
+       only_selected="false"
+       hide_knots="false" />
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <path
+       style="fill:none;fill-opacity:0.852;stroke:#000000;stroke-width:7.9375;stroke-linecap:square;stroke-linejoin:bevel;stroke-miterlimit:1.4;stroke-opacity:1;paint-order:stroke fill markers"
+       id="rect2"
+       width="238.125"
+       height="238.125"
+       x="6.9239264"
+       y="24.051533"
+       inkscape:path-effect="#path-effect2"
+       sodipodi:type="rect"
+       d="M 10.892676,24.051533 H 241.08018 c 2.19868,0 3.96875,1.770062 3.96875,3.96875 V 258.20778 c 0,2.19869 -1.77007,3.96875 -3.96875,3.96875 H 10.892676 c -2.1986871,0 -3.9687496,-1.77006 -3.9687496,-3.96875 V 28.020283 c 0,-2.198688 1.7700625,-3.96875 3.9687496,-3.96875 z"
+       ry="3.96875"
+       rx="3.96875"
+       transform="translate(6.3052402,-10.822366)" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:85.061px;font-family:Monospace;-inkscape-font-specification:Monospace;writing-mode:lr-tb;direction:ltr;fill:#365b74;fill-opacity:1;stroke:none;stroke-width:38.2775;stroke-linecap:square;stroke-linejoin:bevel;stroke-miterlimit:1.4;stroke-opacity:1;paint-order:stroke fill markers"
+       x="11.762586"
+       y="85.5867"
+       id="text4"
+       transform="scale(1.1316158,0.88369213)"><tspan
+         style="fill:#365b74;fill-opacity:1;stroke-width:38.2775"
+         x="11.762586"
+         y="85.5867"
+         sodipodi:role="line"
+         id="tspan7">SCRL</tspan><tspan
+         style="fill:#365b74;fill-opacity:1;stroke-width:38.2775"
+         x="11.762586"
+         y="191.91295"
+         sodipodi:role="line"
+         id="tspan8">LOCK</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.9961849,0,0,1.3905222,-141.72636,-783.24277)"
+       id="text5"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:66.6667px;font-family:Monospace;-inkscape-font-specification:Monospace;writing-mode:lr-tb;direction:ltr;white-space:pre;shape-inside:url(#rect5);fill:#744545;fill-opacity:1;stroke:none;stroke-width:30;stroke-linecap:square;stroke-linejoin:bevel;stroke-miterlimit:1.4;stroke-opacity:1;paint-order:stroke fill markers"><tspan
+         x="77.130859"
+         y="739.38284"
+         id="tspan1">OFF</tspan></text>
+  </g>
+</svg>
