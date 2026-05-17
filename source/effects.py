@@ -1,39 +1,41 @@
 import numpy as np
 from numba import njit
+from yml_reader import read
+INITIAL_PARAMETERS = read("config/effects.yml")
 
 EFFECT_PARAMS = {
     # ECHO
-    "ECHO_ROOM_SIZE": 4800,   # samples (~0.1s at 48kHz)
-    "ECHO_WET": 0.25,         # echo volume
-    "ECHO_FEEDBACK": 0.3,     # feedback amount
-    "ECHO_DECAY": 0.6,        # distance decay per echo
-    "ECHO_MIX": 0.8,          # blend original+effect
-    "ECHO_CUTOFF": 0.3,       # low-pass: smaller = muffled / far away
+    "ECHO_ROOM_SIZE": INITIAL_PARAMETERS["ECHO_ROOM_SIZE"],   # samples (~0.1s at 48kHz)
+    "ECHO_WET": INITIAL_PARAMETERS["ECHO_WET"],         # echo volume
+    "ECHO_FEEDBACK": INITIAL_PARAMETERS["ECHO_FEEDBACK"],     # feedback amount
+    "ECHO_DECAY": INITIAL_PARAMETERS["ECHO_DECAY"],        # distance decay per echo
+    "ECHO_MIX": INITIAL_PARAMETERS["ECHO_MIX"],          # blend original+effect
+    "ECHO_CUTOFF": INITIAL_PARAMETERS["ECHO_CUTOFF"],       # low-pass: smaller = muffled / far away
     
     # BITCRUSH
-    "BITCRUSH_BITS": 8,
-    "BITCRUSH_DOWNSAMPLE": 6,
+    "BITCRUSH_BITS": INITIAL_PARAMETERS["BITCRUSH_BITS"],
+    "BITCRUSH_DOWNSAMPLE": INITIAL_PARAMETERS["BITCRUSH_DOWNSAMPLE"],
 
     # Saturation
-    "SAT_DRIVE": 2.0,
-    "SAT_EXCITE": 0.15,
+    "SAT_DRIVE": INITIAL_PARAMETERS["SAT_DRIVE"],
+    "SAT_EXCITE": INITIAL_PARAMETERS["SAT_EXCITE"],
 
     # Reverb
-    "REV_WET": 0.12,
-    "REV_FEEDBACK": 0.35,
-    "REV_D1": 1200,
-    "REV_D2": 1700,
-    "REV_D3": 900,
+    "REV_WET": INITIAL_PARAMETERS["REV_WET"],
+    "REV_FEEDBACK": INITIAL_PARAMETERS["REV_FEEDBACK"],
+    "REV_D1": INITIAL_PARAMETERS["REV_D1"],
+    "REV_D2": INITIAL_PARAMETERS["REV_D2"],
+    "REV_D3": INITIAL_PARAMETERS["REV_D3"],
 
     # Pitch shift
-    "PITCH_SEMITONES": 0.0,
-    "FORMANT_SEMITONES": 0.0,
-    "GRANP_GRAIN": 480,
+    "PITCH_SEMITONES": INITIAL_PARAMETERS["PITCH_SEMITONES"],
+    "FORMANT_SEMITONES": INITIAL_PARAMETERS["FORMANT_SEMITONES"],
+    "GRANP_GRAIN": INITIAL_PARAMETERS["GRANP_GRAIN"],
 
     # Granular delay
-    "GRAN_GRAIN": 800,
-    "GRAN_JITTER": 0.3,
-    "GRAN_MIX": 0.25,
+    "GRAN_GRAIN": INITIAL_PARAMETERS["GRAN_GRAIN"],
+    "GRAN_JITTER": INITIAL_PARAMETERS["GRAN_JITTER"],
+    "GRAN_MIX": INITIAL_PARAMETERS["GRAN_MIX"],
 }
 
 # ---------------- Effect Implementations ----------------

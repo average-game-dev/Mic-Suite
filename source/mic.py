@@ -8,10 +8,11 @@ import time
 import sys
 from collections import deque
 from effects import EFFECTS, EFFECT_PARAMS
-
+from yml_reader import read
+INITIAL_PARAMETERS = read("config/mic.yml")
 
 # ---------------- Globals & Thread-safety ----------------
-MIC_GAIN = 1.0
+MIC_GAIN = INITIAL_PARAMETERS["MIC_GAIN"]
 mic_gain_lock = threading.Lock()
 
 volume = 0.0
@@ -68,7 +69,7 @@ def scroll_lock_updater():
                 mic_on = new_state
 
         last_state = new_state
-        time.sleep(0.01)
+        time.sleep(INITIAL_PARAMETERS["muteUpdateInterval"] / 1000)
 
 
 # ---------------- UI ----------------
@@ -84,12 +85,12 @@ class MeterOverlay(QtWidgets.QWidget):
         )
 
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.resize(360, 24)
-        self.move(50, 50)
+        self.resize(INITIAL_PARAMETERS["meterSize"]["x"], INITIAL_PARAMETERS["meterSize"]["y"])
+        self.move(INITIAL_PARAMETERS["meterPosition"]["x"], INITIAL_PARAMETERS["meterPosition"]["y"])
 
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.update)
-        self.timer.start(30)
+        self.timer.start(INITIAL_PARAMETERS["meterUpdateInterval"])
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -101,7 +102,7 @@ class MeterOverlay(QtWidgets.QWidget):
         with mic_lock:
             on = mic_on
 
-        fill = int(min(max(vol * 1000.0, 0.0), 360))
+        fill = int(min(max(vol * INITIAL_PARAMETERS["meterSensitivity"], 0.0), 1870))
 
         if on:
             color = (
@@ -247,16 +248,18 @@ def main():
         print("Invalid device id:", e)
         return
 
-    samplerate = 48000
-    blocksize = 256
+    samplerate = INITIAL_PARAMETERS["samplerate"]
+    blocksize = INITIAL_PARAMETERS["blocksize"]
+    channels = INITIAL_PARAMETERS["channels"]
+    latency = INITIAL_PARAMETERS["latency"]
 
     try:
         stream = sd.Stream(
             samplerate=samplerate,
-            blocksize=128,  # lower for latency
+            blocksize=blocksize,  # lower for latency
             device=(mic_id, out_id),
-            channels=1,
-            latency='low',
+            channels=channels,
+            latency=latency,
             dtype='float32',
             callback=duplex_callback
         )

@@ -1,0 +1,16 @@
+"MIC_GAIN": 1.0
+"blocksize": 200
+"samplerate": 48000
+"latency": "low"
+"channels": 1
+"meterPosition": {
+    "x": 50,
+    "y": 50
+}
+"meterSize": {
+    "x": 1870,
+    "y": 24
+}
+"meterSensitivity": 1000.0
+"meterUpdateInterval": 30
+"muteUpdateInterval": 10

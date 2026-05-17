@@ -14,6 +14,8 @@ import rich
 from sys import argv
 import argparse
 from effects import EFFECTS, EFFECT_PARAMS
+from yml_reader import read
+INITIAL_PARAMETRER = read("config/sound_board.yml")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", action="store_true")
@@ -30,10 +32,10 @@ else: debug = False
 # --------------------------
 # Settings (tweakable)
 # --------------------------
-stream_sr = 48000
-stream_channels = 2
-blocksize = 1024  # preferred frames per callback
-master_gain = 1.0  # default master gain
+stream_sr = INITIAL_PARAMETRER["stream_sr"]
+stream_channels = INITIAL_PARAMETRER["stream_channels"]
+blocksize = INITIAL_PARAMETRER["blocksize"]  # preferred frames per callback
+master_gain = INITIAL_PARAMETRER["master_gain"] # default master gain
 
 SOUND_DIR = "sounds"
 CACHE_DIR = "cache"
@@ -186,7 +188,7 @@ playing_sounds = []  # list of dicts: {"data":..., "pos":int, "gain":float}
 playing_lock = threading.Lock()
 
 # small cache of last produced mixed chunks from master callback for slave to consume
-slave_buffer = deque(maxlen=256)  # holds np arrays of shape (frames,channels)
+slave_buffer = deque(maxlen=INITIAL_PARAMETRER["slave_buffer"])  # holds np arrays of shape (frames,channels)
 slave_buffer_lock = threading.Lock()
 
 # --------------------------
@@ -204,6 +206,8 @@ def num_pad_handler(num_pad_num):
             idx = num_pad_num + 50
         elif (keyboard.is_pressed(numpad_plus_code) and keyboard.is_pressed(numpad_enter_code)) and audios.get(num_pad_num + 60):
             idx = num_pad_num + 60
+        elif (keyboard.is_pressed(numpad_minus_code) and keyboard.is_pressed(numpad_plus_code) and keyboard.is_pressed(numpad_enter_code)) and audios.get(num_pad_num):
+            idx = num_pad_num + 70
         elif keyboard.is_pressed(numpad_enter_code) and audios.get(num_pad_num + 30):
             idx = num_pad_num + 30
         elif keyboard.is_pressed(numpad_plus_code) and audios.get(num_pad_num + 10):

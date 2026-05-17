@@ -1,0 +1,5 @@
+"stream_sr": 48000
+"stream_channels": 2
+"blocksize": 1024
+"slave_buffer": 256
+"master_gain": 1.0

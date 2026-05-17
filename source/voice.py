@@ -62,7 +62,7 @@ def tts_to_audio(text, voice):
     stream.Format = fmt
     voice.AudioOutputStream = stream
 
-    voice.Speak(text)
+    voice.Speak(text.lower())
 
     audio_tuple = stream.GetData()  # returns tuple of ints
     audio_bytes = bytes(audio_tuple)  # convert tuple -> bytes
