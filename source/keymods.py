@@ -10,55 +10,71 @@ match os.name:
             return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
         def scrolllock_on():
             return bool(ctypes.windll.user32.GetKeyState(0x91) & 1)
-    case "posix":
+    case "posix":        
+        import select
+        from evdev import InputDevice, list_devices, ecodes
+        import threading
 
-        # i tested the caps lock on linux, and im not dealing with the audio anymore than i need to, if a distro need special handling make a pull request or something
+        _scrolllock = False
+        _capslock   = False
+        _numlock    = False
+
+        def run(devices, keymap):
+            while True:
+                r, _, _ = select.select(devices, [], [])
+
+                for dev in r:
+                    for event in dev.read():
+                        if event.type != ecodes.EV_KEY:
+                            continue
+
+                        if event.value != 1:
+                            continue
+
+                        fn = keymap.get(event.code)
+                        if fn:
+                            fn(dev, event)
+
+
+        devices = [InputDevice(p) for p in list_devices()]
         
-        import evdev
-        from evdev import ecodes, InputDevice, list_devices
+        def __scrolllock_pressed(d1, d2):
+            global _scrolllock
+            _scrolllock = not _scrolllock
+        def __numlock_pressed(d1, d2):
+            global _numlock
+            _numlock = not _numlock
+        def __capslock_pressed(d1, d2):
+            global _capslock
+            _capslock = not _capslock
 
-        # ---------------- Find all devices with keymod capability ----------------
-        def _list_keymod_devices():
-            devices = [InputDevice(path) for path in list_devices()]
-            keymod_devices = []
 
-            for dev in devices:
-                caps = dev.capabilities()
-                if ecodes.EV_KEY in caps:
-                    keys = caps[ecodes.EV_KEY]
-                    toggle_keys = {ecodes.KEY_CAPSLOCK, ecodes.KEY_NUMLOCK, ecodes.KEY_SCROLLLOCK}
-                    if any(k in keys for k in toggle_keys):
-                        keymod_devices.append(dev)
-            return keymod_devices
+        __listener = threading.Thread(target = run, args = 
+            (devices, {
+                ecodes.KEY_SCROLLLOCK: __scrolllock_pressed,
+                ecodes.KEY_CAPSLOCK: __capslock_pressed,
+                ecodes.KEY_NUMLOCK: __numlock_pressed,
+                }
+            )
+        )
 
-        # ---------------- Pick the best candidate device ----------------
-        def _pick_keyboard(devices):
-            # Prefer USB keyboard
-            usb_kb = [d for d in devices if 'usb' in (d.phys or '').lower()]
-            named_kb = [d for d in usb_kb if 'keyboard' in (d.name or '').lower()]
-            if named_kb:
-                return named_kb[0]
-            if usb_kb:
-                return usb_kb[0]
-            if devices:
-                return devices[0]
-            return None
+        __listener.daemon = True
 
-        # ---------------- Internal setup ----------------
-        _keymod_devices = _list_keymod_devices()
-        _keyboard = _pick_keyboard(_keymod_devices)
-        if not _keyboard:
-            raise RuntimeError("No keyboard with keymod capability found!")
+        __listener.start()
 
-        # ---------------- API functions ----------------
         def is_numlock_on():
-            """Return True if Num Lock is on"""
-            return ecodes.LED_NUML in _keyboard.leds()
-
+            return _numlock
         def capslock_on():
-            """Return True if Caps Lock is on"""
-            return ecodes.LED_CAPSL in _keyboard.leds()
-
+            return _capslock
         def scrolllock_on():
-            """Return True if Scroll Lock is on"""
-            return ecodes.LED_SCROLLL in _keyboard.leds()
+            return _scrolllock
+        
+if __name__ == "__main__":
+    import time
+
+    try:
+        while True:
+            print(f"Numlock: {is_numlock_on()}\nCapslock: {capslock_on()}\nScrollock: {scrolllock_on()}")
+            time.sleep(0.1)
+    except KeyboardInterrupt as e:
+        print("Exiting")

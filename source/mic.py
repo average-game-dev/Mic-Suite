@@ -9,6 +9,7 @@ import sys
 from collections import deque
 from effects import EFFECTS, EFFECT_PARAMS
 from yml_reader import read
+
 INITIAL_PARAMETERS = read("config/mic.yml")
 
 # ---------------- Globals & Thread-safety ----------------
@@ -132,13 +133,16 @@ def duplex_callback(indata, outdata, frames, time_info, status):
     with mic_gain_lock:
         gain = MIC_GAIN
 
-    chunk = indata.copy() * gain
+    outdata[:] = indata
+    outdata *= gain
+    chunk = outdata
 
     # volume meter
-    global volume
-    with volume_lock:
-        volume_val = float(np.sqrt(np.mean(chunk**2)))
-        volume = max(volume_val, volume * 0.9)
+    if False:
+        global volume
+        with volume_lock:
+            volume_val = float(np.sqrt(np.mean(chunk**2)))
+            volume = max(volume_val, volume * 0.9)
 
     # apply effects
     chunk = process_effect(chunk)
@@ -289,6 +293,6 @@ def main():
             pass
 
         print("Shutting down...")
-
+        
 if __name__ == "__main__":
     main()
