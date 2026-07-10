@@ -36,12 +36,43 @@ EFFECT_PARAMS = {
     "GRAN_GRAIN": INITIAL_PARAMETERS["GRAN_GRAIN"],
     "GRAN_JITTER": INITIAL_PARAMETERS["GRAN_JITTER"],
     "GRAN_MIX": INITIAL_PARAMETERS["GRAN_MIX"],
+
+        # Ping-pong delay
+    "PP_DELAY": INITIAL_PARAMETERS.get("PP_DELAY", 12000),
+    "PP_FB": INITIAL_PARAMETERS.get("PP_FB", 0.35),
+    "PP_MIX": INITIAL_PARAMETERS.get("PP_MIX", 0.4),
+
+    # Wow / flutter
+    "WOW_DEPTH": INITIAL_PARAMETERS.get("WOW_DEPTH", 80),
+    "WOW_RATE": INITIAL_PARAMETERS.get("WOW_RATE", 0.002),
+
+    # Tilt EQ
+    "TILT_LOW": INITIAL_PARAMETERS.get("TILT_LOW", 0.9),
+    "TILT_HIGH": INITIAL_PARAMETERS.get("TILT_HIGH", 1.1),
+    "TILT_SPLIT": INITIAL_PARAMETERS.get("TILT_SPLIT", 2048),
+
+    # Gate
+    "GATE_THRESH": INITIAL_PARAMETERS.get("GATE_THRESH", 0.02),
+    "GATE_ATTACK": INITIAL_PARAMETERS.get("GATE_ATTACK", 0.05),
+    "GATE_RELEASE": INITIAL_PARAMETERS.get("GATE_RELEASE", 0.01),
+
+    # Soft clip
+    "CLIP_DRIVE": INITIAL_PARAMETERS.get("CLIP_DRIVE", 1.8),
+    "CLIP_MIX": INITIAL_PARAMETERS.get("CLIP_MIX", 0.8),
+
+    # Smear / pseudo reverb
+    "SMEAR_AMOUNT": INITIAL_PARAMETERS.get("SMEAR_AMOUNT", 32),
 }
 
 # ---------------- Effect Implementations ----------------
 
 def effect_none(chunk):
     return chunk
+
+
+@njit
+def _as_float1d(x):
+    return x.ravel()
 
 # HPF
 hpf_prev_in = 0.0
@@ -439,6 +470,211 @@ def effect_granular(chunk):
     )
     return out.reshape(chunk.shape)
 
+pp_buf = np.zeros(96000, dtype=np.float32)
+pp_i = 0
+
+@njit
+def _mono_pingpong(x, buf, i, delay, fb, mix, flip):
+    out = np.empty_like(x)
+    buf_len = len(buf)
+
+    for n in range(len(x)):
+        buf[i] = x[n] + buf[i] * fb
+
+        d = delay if flip == 0 else delay // 2
+        r = (i - d) % buf_len
+
+        wet = buf[r]
+
+        out[n] = x[n] * (1 - mix) + wet * mix
+
+        i += 1
+        if i >= buf_len:
+            i = 0
+
+        if n % delay == 0:
+            flip = 1 - flip
+
+    return out, buf, i, flip
+
+
+def effect_pingpong(chunk):
+    global pp_buf, pp_i
+
+    x = chunk.ravel()
+
+    delay = int(EFFECT_PARAMS["PP_DELAY"])
+    fb = EFFECT_PARAMS["PP_FB"]
+    mix = EFFECT_PARAMS["PP_MIX"]
+
+    out, pp_buf, pp_i, _ = _mono_pingpong(
+        x, pp_buf, pp_i,
+        delay, fb, mix, 0
+    )
+
+    return out.reshape(-1, 1)
+
+wow_buf = np.zeros(96000, dtype=np.float32)
+wow_i = 0
+wow_phase = 0.0
+
+@njit
+def _mono_wow(x, buf, i, phase, depth, rate):
+    out = np.empty_like(x)
+
+    for n in range(len(x)):
+        buf[i] = x[n]
+
+        phase += rate
+        offset = int(depth * np.sin(phase))
+
+        r = (i - offset) % len(buf)
+        out[n] = buf[r]
+
+        i += 1
+        if i >= len(buf):
+            i = 0
+
+    return out, buf, i, phase
+
+
+def effect_wow(chunk):
+    global wow_buf, wow_i, wow_phase
+
+    x = chunk.ravel()
+
+    depth = int(EFFECT_PARAMS["WOW_DEPTH"])
+    rate = EFFECT_PARAMS["WOW_RATE"]
+
+    out, wow_buf, wow_i, wow_phase = _mono_wow(
+        x, wow_buf, wow_i, wow_phase,
+        depth, rate
+    )
+
+    return out.reshape(-1, 1)
+
+@njit
+def _mono_tilt(x, low, high, split):
+    out = np.empty_like(x)
+
+    for i in range(len(x)):
+        v = x[i]
+
+        if i % split < split // 2:
+            v *= low
+        else:
+            v *= high
+
+        out[i] = v
+
+    return out
+
+
+def effect_tilt(chunk):
+    x = chunk.ravel()
+
+    low = EFFECT_PARAMS["TILT_LOW"]
+    high = EFFECT_PARAMS["TILT_HIGH"]
+    split = int(EFFECT_PARAMS["TILT_SPLIT"])
+
+    out = _mono_tilt(x, low, high, split)
+
+    return out.reshape(-1, 1)
+
+gate_state = 0.0
+
+@njit
+def _mono_gate(x, threshold, attack, release, state):
+    out = np.empty_like(x)
+
+    for i in range(len(x)):
+        amp = abs(x[i])
+
+        if amp > threshold:
+            state += attack * (1.0 - state)
+        else:
+            state += release * (0.0 - state)
+
+        out[i] = x[i] * state
+
+    return out, state
+
+
+def effect_gate(chunk):
+    global gate_state
+
+    x = chunk.ravel()
+
+    threshold = EFFECT_PARAMS["GATE_THRESH"]
+    attack = EFFECT_PARAMS["GATE_ATTACK"]
+    release = EFFECT_PARAMS["GATE_RELEASE"]
+
+    out, gate_state = _mono_gate(x, threshold, attack, release, gate_state)
+
+    return out.reshape(-1, 1)
+
+@njit
+def _mono_softclip(x, drive, mix):
+    out = np.empty_like(x)
+
+    for i in range(len(x)):
+        v = x[i] * drive
+
+        if v > 1:
+            v = 1 - np.exp(-v)
+        elif v < -1:
+            v = -1 + np.exp(v)
+
+        out[i] = x[i] * (1 - mix) + v * mix
+
+    return out
+
+
+def effect_softclip(chunk):
+    x = chunk.ravel()
+
+    drive = EFFECT_PARAMS["CLIP_DRIVE"]
+    mix = EFFECT_PARAMS["CLIP_MIX"]
+
+    out = _mono_softclip(x, drive, mix)
+
+    return out.reshape(-1, 1)
+
+smear_buf = np.zeros(96000, dtype=np.float32)
+smear_i = 0
+
+@njit
+def _mono_smear(x, buf, i, amount):
+    out = np.empty_like(x)
+
+    for n in range(len(x)):
+        buf[i] = x[n]
+
+        acc = 0.0
+        for j in range(1, amount):
+            acc += buf[(i - j) % len(buf)]
+
+        out[n] = (x[n] + acc / amount) * 0.5
+
+        i += 1
+        if i >= len(buf):
+            i = 0
+
+    return out, buf, i
+
+
+def effect_smear(chunk):
+    global smear_buf, smear_i
+
+    x = chunk.ravel()
+
+    amount = int(EFFECT_PARAMS["SMEAR_AMOUNT"])
+
+    out, smear_buf, smear_i = _mono_smear(x, smear_buf, smear_i, amount)
+
+    return out.reshape(-1, 1)
+
+
 # ---------------- Dictionary ----------------
 EFFECTS = {
     "none": effect_none,
@@ -446,5 +682,13 @@ EFFECTS = {
     "saturation": effect_saturation,
     "reverb": effect_reverb,
     "pitch": effect_granular_pitch,
-    "granular": effect_granular
+    "granular": effect_granular,
+
+        # NEW EFFECTS
+    "pingpong": effect_pingpong,
+    "wow_flutter": effect_wow,
+    "tilt_eq": effect_tilt,
+    "gate": effect_gate,
+    "softclip": effect_softclip,
+    "smear": effect_smear,
 }

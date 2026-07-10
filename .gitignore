@@ -1,5 +1,5 @@
 env/
-linuxenv/
+lenv/
 __pycache__
 .vscode/
 .idea/

@@ -1,7 +1,7 @@
 "MIC_GAIN": 1.0
 "blocksize": 200
 "samplerate": 48000
-"latency": "low"
+"latency": "high"
 "channels": 1
 "meterPosition": {
     "x": 50,

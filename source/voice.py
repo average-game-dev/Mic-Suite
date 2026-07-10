@@ -94,7 +94,7 @@ def select_voice():
 
 def main():
     selected_voice = select_voice()
-    selected_voice.Rate = 0
+    selected_voice.Rate = 1
     selected_voice.Volume = 100
 
     print("\nType text to speak. Ctrl+C to quit.")

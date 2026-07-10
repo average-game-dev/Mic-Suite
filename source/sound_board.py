@@ -78,11 +78,14 @@ audio_engine_alive = False
 # --------------------------
 # Audio file preprocessing (ffmpeg)
 # --------------------------
-def load_audio_cached(file, normalize=True, recurse=False):
+def load_audio_cached(file, normalize=True, recurse=True):
     """
     Load any audio file with resampling, optional loudness normalization,
     and cache the processed result in FLAC for fast future loads.
     """
+
+    print(f"Attempting to load file {file}")
+
     base_name = os.path.splitext(os.path.basename(file))[0]
 
     # Ensure cache directory exists
@@ -142,7 +145,7 @@ def load_audio_cached(file, normalize=True, recurse=False):
         raise RuntimeError(
             f"Sample rate mismatch in {file}: {sr} Hz"
         )
-
+    print(f"Returning data for audio. len: ({len(data)}) File: {cached_file}")
     return data, sr
 
 

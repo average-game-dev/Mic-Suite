@@ -49,3 +49,5 @@ The `url_player.py` is mostly deprecated. In order to get all commands type `hel
 ## `cookies_export.py`
 `cookie_export.py` exports cookies from Firefox SQLite databases into Netscape Navigator style cookies.
 ###### ***Note:*** `cookies_export.py` is mostly deprecated and isn't updated. 
+## `keymods.py`
+`keymods.py` is an internal script used by Mic-Suite to keep track of the states of Capslock, Numlock, and ScrollLock. `keymods.py` support Windows, and Linux. Linux support, however, does not properly effect the actual state the normal desktop likely provides. This is because in some compositors, like Wayland, it does not update the ScrollLock LED State in a way in which the script can read it. As such, we must manually keep track of the keypresses and update the states accordingly.

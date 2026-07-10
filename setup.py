@@ -39,6 +39,11 @@ def get_packages():
         "comtypes"
     ]
 
+    if os.name == "posix":
+        pkgs.extend([
+            "evdev"
+        ])
+
     if AI_FLAG: # heavy packages only used for AI stuff
         pkgs.extend([
             "pyttsx3",

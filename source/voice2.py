@@ -24,9 +24,9 @@ def choose_output_devices():
 
 device_ids = choose_output_devices()
 
-max_length = 80
-temperature = 0.5
-voice_rate = 150
+max_length = 400
+temperature = 5000.0
+voice_rate = 200
 
 # GPT-2
 tokenizer = GPT2Tokenizer.from_pretrained("gpt2")

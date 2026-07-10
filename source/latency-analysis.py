@@ -8,10 +8,10 @@ import time
 # -----------------------------
 # Configuration
 # -----------------------------
-device1 = 1  # ID or name of first device (loopback)
-device2 = 2  # ID or name of second device (USB mic)
+device1 = 32  # ID or name of first device (loopback)
+device2 = 33  # ID or name of second device (USB mic)
 samplerate = 48000  # Hz
-duration = 30  # seconds
+duration = 10  # seconds
 file_out = "dual_device.wav"
 
 # -----------------------------

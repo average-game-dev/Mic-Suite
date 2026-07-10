@@ -43,6 +43,7 @@ def set_effect(fns):
             EFFECT_ENABLED = True
 
 def process_effect(chunk):
+
     with effect_lock:
         if not EFFECT_ENABLED or not CURRENT_EFFECTS:
             return chunk
